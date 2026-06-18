@@ -7,8 +7,12 @@ from scipy.spatial.transform import Rotation as R
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-DATASET_DIR = r"C:\Users\Student3\Documents\xrtraceai\Data_set\Halo_assist_dataset"
-OUTPUT_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data"
+
+CURRENT_DIR = os.getcwd()
+
+DATASET_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "Data_set", "Halo_assist_dataset"))
+
+OUTPUT_DIR = CURRENT_DIR
 
 # Verified directly from the data: col0 increments by 0.03333... -> 30 fps.
 # (Original script hardcoded 1/29.5; docstring claimed 1/90. Both were wrong.)
@@ -64,18 +68,31 @@ def quaternion_angular_velocity(quat: np.ndarray, dt: float) -> np.ndarray:
     angvel = np.diff(rotvecs, axis=0, prepend=rotvecs[0:1]) / dt
     return angvel
 
-
-def extract_behavioural_profile(brv: np.ndarray, head_pos_full: np.ndarray) -> dict:
+def relative_angular_velocity(quat: np.ndarray, dt: float) -> np.ndarray:
     """
-    brv columns: [0:11]=spatial, [11:22]=velocity-of-spatial (see IDX / IDX_VEL).
-    head_pos_full: full 3D scene-relative head position [N, 3] (for height proxy).
+    Mathematically correct angular velocity (rad/s) between consecutive orientations.
+    """
+    n = len(quat)
+    angvel = np.zeros((n, 3))
+    rots = R.from_quat(quat)
+    for i in range(1, n):
+        r_diff = rots[i] * rots[i - 1].inv()
+        angvel[i] = r_diff.as_rotvec() / dt
+    return angvel
+
+def extract_behavioural_profile(brv: np.ndarray, head_pos_full: np.ndarray,
+                                 head_quat_full: np.ndarray) -> dict:
+    """
+    brv columns: [0:11]=spatial, [11:22]=velocity-of-spatial.
+    head_pos_full:  [N, 3] full scene-relative head position (for height proxy).
+    head_quat_full: [N, 4] head orientation, needed for true angular velocity.
     """
     profile = {}
     profile["height_proxy"] = float(np.median(head_pos_full[:, 1]))
 
     wL_pos = brv[:, IDX["left_rel"]]
     wR_pos = brv[:, IDX["right_rel"]]
-    wL_vel = brv[:, IDX_VEL["left_rel"]]   # now genuinely wrist velocity
+    wL_vel = brv[:, IDX_VEL["left_rel"]]
     wR_vel = brv[:, IDX_VEL["right_rel"]]
 
     vel_mag_L = np.linalg.norm(wL_vel, axis=1)
@@ -87,19 +104,26 @@ def extract_behavioural_profile(brv: np.ndarray, head_pos_full: np.ndarray) -> d
     profile["peak_vel_L"] = float(np.percentile(vel_mag_L, 99))
     profile["peak_vel_R"] = float(np.percentile(vel_mag_R, 99))
 
+    # Acceleration = 2nd derivative of position = 1st derivative of velocity.
     accel_L = np.diff(wL_vel, axis=0, prepend=wL_vel[0:1]) / DT
     accel_R = np.diff(wR_vel, axis=0, prepend=wR_vel[0:1]) / DT
-    profile["jerk_mean"] = float((np.abs(accel_L).mean() + np.abs(accel_R).mean()) / 2)
 
-    head_quat = brv[:, IDX["head_quat"]]
-    profile["head_sway"] = float(np.std(quaternion_angular_velocity(head_quat, DT)))
+    # Jerk = 3rd derivative of position = 1st derivative of acceleration.
+    jerk_L = np.diff(accel_L, axis=0, prepend=accel_L[0:1]) / DT
+    jerk_R = np.diff(accel_R, axis=0, prepend=accel_R[0:1]) / DT
+    jerk_mag_L = np.linalg.norm(jerk_L, axis=1)
+    jerk_mag_R = np.linalg.norm(jerk_R, axis=1)
+    profile["jerk_mean"] = float((jerk_mag_L.mean() + jerk_mag_R.mean()) / 2)
+
+    # True angular velocity via relative rotation
+    head_angvel = relative_angular_velocity(head_quat_full, DT)
+    profile["head_sway"] = float(np.std(np.linalg.norm(head_angvel, axis=1)))
 
     n = min(len(vel_mag_L), len(vel_mag_R))
     profile["bilateral_symmetry"] = float(
         np.corrcoef(vel_mag_L[:n], vel_mag_R[:n])[0, 1]
     )
     return profile
-
 
 def process_session_to_disk(session_id: str, split_output_dir: str):
     session_path = os.path.join(DATASET_DIR, session_id)
@@ -157,14 +181,14 @@ def process_session_to_disk(session_id: str, split_output_dir: str):
 
     np.save(os.path.join(split_output_dir, f"{session_id}_brv.npy"), brv)
 
-    profile = extract_behavioural_profile(brv, head_pos)
+    profile = extract_behavioural_profile(brv, head_pos, head_quat)
     with open(os.path.join(split_output_dir, f"{session_id}_profile.json"), "w") as f:
         json.dump(profile, f, indent=2)
 
     print(f"  Processed: {session_id}  (brv shape={brv.shape}, fps={FRAME_RATE_HZ})")
 
 if __name__ == "__main__":
-    # Point directly to the folder containing the text files
+    # Point directly to the subfolder containing the text files
     SPLITS_DIR = os.path.join(DATASET_DIR, "data-splits-v1_2")
 
     for split in ["train", "val", "test"]:
