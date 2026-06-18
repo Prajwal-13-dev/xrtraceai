@@ -1,1 +1,11 @@
 Data_set/
+
+
+# Ignore the generated PyTorch dataset splits
+preprocess_data/train/
+preprocess_data/val/
+preprocess_data/test/
+
+# Also ignore any stray tensor or profile files in the main folder
+preprocess_data/*.npy
+preprocess_data/*.json
