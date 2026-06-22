@@ -3,6 +3,10 @@ import json
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as R
+from collections import defaultdict
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 # ============================================================================
 # CONFIGURATION
@@ -13,9 +17,7 @@ CURRENT_DIR = os.getcwd()
 DATASET_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "Data_set", "Halo_assist_dataset"))
 
 OUTPUT_DIR = CURRENT_DIR
-
-# Verified directly from the data: col0 increments by 0.03333... -> 30 fps.
-# (Original script hardcoded 1/29.5; docstring claimed 1/90. Both were wrong.)
+ANNOTATION_FILE = os.path.join(DATASET_DIR, "data-annotation-trainval-v1_1.json")
 FRAME_RATE_HZ = 30.0
 DT = 1.0 / FRAME_RATE_HZ
 
@@ -34,14 +36,6 @@ HAND_MIN_COLS = 5
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ----------------------------------------------------------------------------
-# Explicit, named feature layout for the BRV tensor.
-# spatial block (11 cols): [head_pos_y(1), head_quat(4), left_rel(3), right_rel(3)]
-# Final brv = hstack([spatial, velocity_of_spatial]) -> 22 cols total, NOT 19.
-# (Bug 1 fix: the original code claimed "19-Feature" in a comment, which caused
-#  wL_vel/wR_vel to be sliced from the wrong columns -- mixing head-rotation
-#  velocity into what was assumed to be wrist velocity.)
-# ----------------------------------------------------------------------------
 SPATIAL_DIM = 11
 IDX = {
     "head_pos_y": slice(0, 1),
@@ -54,6 +48,22 @@ IDX_VEL = {k: slice(v.start + VEL_OFFSET, v.stop + VEL_OFFSET)
            for k, v in IDX.items() if k in ("left_rel", "right_rel")}
 BRV_TOTAL_DIM = SPATIAL_DIM * 2  # 22
 
+# ============================================================================
+# STATISTICS CONFIGURATION
+# ============================================================================
+SPLITS       = ["train", "val", "test"]
+CLASS_NAMES  = ["idle", "locomotion", "object_interaction", "anomalous"]
+CLASS_COLORS = ["#6B7280", "#3B82F6", "#10B981", "#EF4444"]
+
+TASK_KEYWORDS = {
+    "GOPRO":        "gopro",
+    "DSLR":         "dslr",
+    "NESPRESSO":    "nespresso",
+    "SWITCH":       "switch",
+    "NAVVIS":       "navvis",
+    "SMALLPRINTER": "smallprinter",
+    "PRINTER":      "printer",
+}
 
 def quaternion_angular_velocity(quat: np.ndarray, dt: float) -> np.ndarray:
     """
@@ -125,7 +135,78 @@ def extract_behavioural_profile(brv: np.ndarray, head_pos_full: np.ndarray,
     )
     return profile
 
-def process_session_to_disk(session_id: str, split_output_dir: str):
+def get_task_type(session_id: str) -> str:
+    sid = session_id.upper()
+    for task in TASK_KEYWORDS:
+        if task in sid:
+            return task
+    return "UNKNOWN"
+
+VERB_TO_CLASS = {
+    # Universal object_interaction verbs
+    "grab": "object_interaction", "place": "object_interaction", 
+    "insert": "object_interaction", "remove": "object_interaction",
+    "open": "object_interaction", "close": "object_interaction",
+    "push": "object_interaction", "pull": "object_interaction",
+    "rotate": "object_interaction", "slide": "object_interaction",
+    "inspect": "object_interaction", "exchange": "object_interaction",
+    "assemble": "object_interaction", "attach": "object_interaction",
+    "adjust": "object_interaction", "press": "object_interaction",
+    
+    # Locomotion — primarily NavVis
+    "walk": "locomotion", "move": "locomotion",
+    "approach": "locomotion", "navigate": "locomotion",
+    
+    # Idle
+    "wait": "idle", "observe": "idle",
+    "watch": "idle", "pause": "idle",
+}
+
+def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np.ndarray:
+    """
+    Returns frame-level label array of length n_frames.
+    Takes the specific list of annotation events for this session.
+    """
+    CLASS_MAP = {"idle": 0, "locomotion": 1, "object_interaction": 2, "anomalous": 3}
+    labels = np.zeros(n_frames, dtype=np.int8)  # default = idle
+    
+    if not session_ann:
+        print(f"  [warn] No annotation data found for {session_id} in master JSON — defaulting to idle")
+        return labels
+        
+    task_type = get_task_type(session_id)
+    fine_actions = [e for e in session_ann if e.get("label") == "Fine grained action"]
+    
+    for event in fine_actions:
+        start_frame = int(event["start"] * FRAME_RATE_HZ)
+        end_frame   = int(event["end"]   * FRAME_RATE_HZ)
+        start_frame = max(0, min(start_frame, n_frames - 1))
+        end_frame   = max(0, min(end_frame,   n_frames))
+        
+        verb = event["attributes"].get("Verb", "").lower().strip()
+        correctness = event["attributes"].get("Action Correctness", "").lower()
+        
+        # Anomalous: wrong action not corrected
+        if "wrong" in correctness and "not corrected" in correctness:
+            labels[start_frame:end_frame] = CLASS_MAP["anomalous"]
+            continue
+            
+        # NavVis specific
+        if task_type == "NAVVIS" and verb == "approach":
+            labels[start_frame:end_frame] = CLASS_MAP["locomotion"]
+            continue
+            
+        mapped = VERB_TO_CLASS.get(verb)
+        if mapped:
+            labels[start_frame:end_frame] = CLASS_MAP[mapped]
+        else:
+            if verb:
+                pass # Optional: print(f"  [unmapped] '{verb}'") to debug
+                
+    return labels
+
+#Main processing function for a single session. 
+def process_session_to_disk(session_id: str, split_output_dir: str,master_annotations: dict):
     session_path = os.path.join(DATASET_DIR, session_id)
     export_dir = os.path.join(session_path, "Export_py")
 
@@ -136,8 +217,6 @@ def process_session_to_disk(session_id: str, split_output_dir: str):
     left_f = os.path.join(hand_dir, "Left_sync.txt")
     right_f = os.path.join(hand_dir, "Right_sync.txt")
 
-    # ---- Head: verified 18-col layout (Bug 4/5 fix: was an unverified
-    # assumption before; now checked against the real sample you provided) ----
     head_raw_full = pd.read_csv(head_f, sep=r",|\s+", engine="python", header=None).values
     assert head_raw_full.shape[1] == HEAD_TOTAL_COLS, (
         f"{session_id}: expected exactly {HEAD_TOTAL_COLS} cols in Head_sync.txt, "
@@ -145,8 +224,7 @@ def process_session_to_disk(session_id: str, split_output_dir: str):
     )
     head_raw = head_raw_full[:, HEAD_MATRIX_SLICE]   # the 16 matrix values
 
-    # ---- Hands: slice asserted, not assumed (fails loudly instead of
-    # silently misaligning, unlike the original script) ----
+
     left_full = pd.read_csv(left_f, sep=r",|\s+", engine="python", header=None).values
     right_full = pd.read_csv(right_f, sep=r",|\s+", engine="python", header=None).values
     assert left_full.shape[1] >= HAND_MIN_COLS and right_full.shape[1] >= HAND_MIN_COLS, (
@@ -179,26 +257,214 @@ def process_session_to_disk(session_id: str, split_output_dir: str):
     brv = np.hstack([spatial, vel])
     assert brv.shape[1] == BRV_TOTAL_DIM, f"brv dim mismatch: {brv.shape[1]} != {BRV_TOTAL_DIM}"
 
+    # 1. Save the 22-feature X Tensor
     np.save(os.path.join(split_output_dir, f"{session_id}_brv.npy"), brv)
 
+    # 2. Extract and Save Behavioral Forensic Profile
     profile = extract_behavioural_profile(brv, head_pos, head_quat)
     with open(os.path.join(split_output_dir, f"{session_id}_profile.json"), "w") as f:
         json.dump(profile, f, indent=2)
 
-    print(f"  Processed: {session_id}  (brv shape={brv.shape}, fps={FRAME_RATE_HZ})")
+    # 3. Extract and Save Ground Truth Labels (Y Tensor)
+    task_type = get_task_type(session_id)
+    
+
+    session_ann = []
+    for key, val in master_annotations.items():
+        # If the folder name (session_id) is found inside the JSON key (e.g. "Folder.mp4")
+        if session_id in key:
+            session_ann = val
+            break
+    
+    # Pass the events into our loader
+    labels = load_session_labels(session_id, session_ann, n_frames=n)
+    np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
+
+    # 4. Generate and Save Statistics Metadata
+    metadata = {
+        "session_id": session_id,
+        "task_type": task_type,
+        "n_frames": n,
+        "frame_rate_hz": FRAME_RATE_HZ,
+        "brv_shape": list(brv.shape),
+        "class_distribution": {
+            "idle": int((labels == 0).sum()),
+            "locomotion": int((labels == 1).sum()),
+            "object_interaction": int((labels == 2).sum()),
+            "anomalous": int((labels == 3).sum()),
+        }
+    }
+    with open(os.path.join(split_output_dir, f"{session_id}_meta.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"  Processed: {session_id}  (brv shape={brv.shape}, task={task_type})")
+
+
+
+def generate_dataset_statistics():
+    print("\n" + "="*92)
+    print(" GENERATING DATASET STATISTICS & CHARTS")
+    print("="*92)
+    
+    stats = defaultdict(lambda: defaultdict(lambda: {
+        "sessions": 0,
+        "frames": [0, 0, 0, 0]
+    }))
+    session_records = []
+
+    for split in SPLITS:
+        split_dir = os.path.join(OUTPUT_DIR, split)
+        if not os.path.isdir(split_dir):
+            continue
+
+        # Look for _meta.json files in the split folders
+        meta_files = sorted(f for f in os.listdir(split_dir) if f.endswith("_meta.json"))
+        if not meta_files:
+            continue
+
+        for mf in meta_files:
+            with open(os.path.join(split_dir, mf)) as fh:
+                meta = json.load(fh)
+
+            sid       = meta["session_id"]
+            task      = get_task_type(sid)
+            dist      = meta.get("class_distribution", {"idle":0, "locomotion":0, "object_interaction":0, "anomalous":0})
+            counts    = [dist["idle"], dist["locomotion"], dist["object_interaction"], dist["anomalous"]]
+            total     = sum(counts)
+
+            stats[split][task]["sessions"] += 1
+            for i in range(4):
+                stats[split][task]["frames"][i] += counts[i]
+
+            session_records.append({
+                "split":   split,
+                "session": sid,
+                "task":    task,
+                "total":   total,
+                **{cls: counts[i] for i, cls in enumerate(CLASS_NAMES)},
+            })
+
+    # (Print Tables & Stratification Analysis)
+    ANOMALOUS_MIN_PCT  = 1.0
+    LOCOMOTION_MIN_PCT = 2.0
+    IDLE_MAX_PCT       = 70.0
+    ROW_FMT  = "  {task:<14} {sessions:>8}  {idle:>9} {loco:>9} {obj:>9} {anom:>9}  {total:>9}  {warn}"
+    PROW_FMT = "  {task:<14} {'':>8}  {idle:>8.1f}% {loco:>8.1f}% {obj:>8.1f}% {anom:>8.1f}%"
+
+    for split in SPLITS:
+        if split not in stats: continue
+        print(f"\n  SPLIT: {split.upper()}\n" + "-"*92)
+        print(f"  {'Task':<14} {'Sessions':>8}  {'idle':>9} {'loco':>9} {'obj_int':>9} {'anomal':>9}  {'Total':>9}  {'Warnings'}\n" + "-"*92)
+
+        split_totals, split_sessions = [0, 0, 0, 0], 0
+        for task in sorted(stats[split]):
+            s, fr = stats[split][task], stats[split][task]["frames"]
+            tot = sum(fr)
+            split_sessions += s["sessions"]
+            for i in range(4): split_totals[i] += fr[i]
+            pcts = [100 * fr[i] / tot if tot > 0 else 0 for i in range(4)]
+
+            warnings = []
+            if pcts[3] < ANOMALOUS_MIN_PCT: warnings.append(f"⚠ anomalous < {ANOMALOUS_MIN_PCT}%")
+            if pcts[1] < LOCOMOTION_MIN_PCT and task not in ("GOPRO", "DSLR", "NESPRESSO", "SWITCH", "SMALLPRINTER", "PRINTER"):
+                warnings.append(f"⚠ loco < {LOCOMOTION_MIN_PCT}%")
+            if pcts[0] > IDLE_MAX_PCT: warnings.append(f"⚠ idle > {IDLE_MAX_PCT}%")
+            
+            print(ROW_FMT.format(task=task, sessions=s["sessions"], idle=fr[0], loco=fr[1], obj=fr[2], anom=fr[3], total=tot, warn=" | ".join(warnings) if warnings else "OK"))
+            print(PROW_FMT.format(task=task, idle=pcts[0], loco=pcts[1], obj=pcts[2], anom=pcts[3]))
+            print()
+
+    # (Generate Charts)
+    for split in SPLITS:
+        if split not in stats or not stats[split]: continue
+        tasks = sorted(stats[split].keys())
+        n_tasks = len(tasks)
+        if n_tasks == 0: continue
+
+        fig, axes = plt.subplots(1, n_tasks, figsize=(max(6, 3.5 * n_tasks), 5), sharey=False)
+        if n_tasks == 1: axes = [axes]
+        fig.suptitle(f"Class distribution by task — {split.upper()} split", fontsize=13, fontweight="bold", y=1.02)
+
+        for ax, task in zip(axes, tasks):
+            fr = stats[split][task]["frames"]
+            tot = sum(fr)
+            pct = [100 * f / tot if tot else 0 for f in fr]
+
+            bars = ax.bar(CLASS_NAMES, pct, color=CLASS_COLORS, edgecolor="white", linewidth=0.6)
+            ax.set_title(f"{task}\n({stats[split][task]['sessions']} sessions)", fontsize=10)
+            ax.set_ylim(0, 100)
+            ax.tick_params(axis="x", rotation=30, labelsize=8)
+
+            for bar, p in zip(bars, pct):
+                if p > 2:
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5, f"{p:.1f}%", ha="center", va="bottom", fontsize=7.5, fontweight="bold")
+            ax.axhline(1, color="#EF4444", linestyle="--", linewidth=0.8, alpha=0.5)
+
+        plt.tight_layout()
+        out_path = os.path.join(OUTPUT_DIR, f"class_dist_{split}.png")
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"  Chart saved → {out_path}")
 
 if __name__ == "__main__":
-    # Point directly to the subfolder containing the text files
     SPLITS_DIR = os.path.join(DATASET_DIR, "data-splits-v1_2")
 
-    for split in ["train", "val", "test"]:
+    # ---> NEW: Load the giant JSON file into memory exactly once <---
+    print(f"Loading master annotation file: {ANNOTATION_FILE} ...")
+    with open(ANNOTATION_FILE, "r") as f:
+        raw_annotations = json.load(f)
+    
+    master_annotations = {}
+    
+    if isinstance(raw_annotations, list):
+        # DEBUG: Print the keys of the very first item so we know the exact structure
+        if len(raw_annotations) > 0 and isinstance(raw_annotations[0], dict):
+            print(f"  [Debug] JSON item keys: {list(raw_annotations[0].keys())}")
+
+        for item in raw_annotations:
+            if not isinstance(item, dict): 
+                continue
+            
+            # Expanded search: checking every possible naming convention
+            sid = (item.get("video_id") or item.get("session_id") or 
+                   item.get("video") or item.get("name") or 
+                   item.get("clip_uid") or item.get("video_uid") or 
+                   item.get("id") or item.get("video_name") or
+                   item.get("RecordingId"))
+            
+            # Ultimate Fallback: Check ALL string values to see if it looks like a session ID
+            if not sid:
+                for val in item.values():
+                    if isinstance(val, str) and ("GoPro" in val or "DSLR" in val or "Nespresso" in val):
+                        sid = val
+                        break
+            
+            if sid:
+                if "annotations" in item and isinstance(item["annotations"], list):
+                    master_annotations[sid] = item["annotations"]
+                elif "events" in item and isinstance(item["events"], list):
+                    master_annotations[sid] = item["events"]
+                else:
+                    if sid not in master_annotations:
+                        master_annotations[sid] = []
+                    master_annotations[sid].append(item)
+
+    elif isinstance(raw_annotations, dict):
+        for key, val in raw_annotations.items():
+            if isinstance(val, list):
+                master_annotations[key] = val
+            elif isinstance(val, dict):
+                master_annotations[key] = val.get("annotations", val.get("events", []))
+
+    print(f"Master annotations indexed successfully! ({len(master_annotations)} sessions found)\n")
+
+    for split in SPLITS:
         split_file = os.path.join(SPLITS_DIR, f"{split}-v1_2.txt")
         
         if not os.path.exists(split_file):
             print(f"[skip] split file not found: {split_file}")
             continue
             
-        # Create a specific folder for this split (e.g., preprocess_data/train)
         split_output_dir = os.path.join(OUTPUT_DIR, split)
         os.makedirs(split_output_dir, exist_ok=True)
         
@@ -210,7 +476,10 @@ if __name__ == "__main__":
                 if not session_id:
                     continue
                 try:
-                    # Pass the specific output folder so files land in the right place
-                    process_session_to_disk(session_id, split_output_dir)
+                    # Pass the master_annotations dictionary down into the function
+                    process_session_to_disk(session_id, split_output_dir, master_annotations)
                 except Exception as e:
                     print(f"  [error] {session_id}: {e}")
+                    
+    # Generate charts after all files are done processing
+    generate_dataset_statistics()
