@@ -192,13 +192,15 @@ VERB_TO_CLASS = {
     "stand": "idle", 
 }
 
-def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np.ndarray:
+def load_session_labels(session_id: str, session_ann: list, n_frames: int,split: str) -> np.ndarray:
     """
     Returns frame-level label array of length n_frames.
     Takes the specific list of annotation events for this session.
     """
     CLASS_MAP = {"idle": 0, "locomotion": 1, "object_interaction": 2, "anomalous": 3}
-    
+    # If this is a test set video, mathematically guarantee it is blinded.
+    if split == "test":
+        return np.full(n_frames, -1, dtype=np.int8)
     # Check if we have data FIRST. 
     if not session_ann:
         print(f"  [warn] No annotation data found for {session_id} — setting labels to -1 (UNKNOWN)")
@@ -338,7 +340,7 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
             session_ann = val
             break
             
-    labels = load_session_labels(session_id, session_ann, n_frames=n)
+    labels = load_session_labels(session_id, session_ann, n_frames=n, split=os.path.basename(split_output_dir))
     np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
 
     session_ann = []
@@ -349,7 +351,7 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
             break
     
     # Pass the events into our loader
-    labels = load_session_labels(session_id, session_ann, n_frames=n)
+    labels = load_session_labels(session_id, session_ann, n_frames=n,split=os.path.basename(split_output_dir))
     np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
 
     # 4. Generate and Save Statistics Metadata
@@ -374,9 +376,9 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
 
 
 def generate_dataset_statistics():
-    print("\n" + "="*92)
+    
     print(" GENERATING DATASET STATISTICS & CHARTS")
-    print("="*92)
+    
     
     stats = defaultdict(lambda: defaultdict(lambda: {
         "sessions": 0,
@@ -421,7 +423,7 @@ def generate_dataset_statistics():
     LOCOMOTION_MIN_PCT = 2.0
     IDLE_MAX_PCT       = 70.0
     ROW_FMT  = "  {task:<14} {sessions:>8}  {idle:>9} {loco:>9} {obj:>9} {anom:>9}  {total:>9}  {warn}"
-    PROW_FMT = "  {task:<14} {'':>8}  {idle:>8.1f}% {loco:>8.1f}% {obj:>8.1f}% {anom:>8.1f}%"
+    PROW_FMT = "  {task:<14}          {idle:>9.1f}% {loco:>9.1f}% {obj:>9.1f}% {anom:>9.1f}%"
 
     for split in SPLITS:
         if split not in stats: continue
