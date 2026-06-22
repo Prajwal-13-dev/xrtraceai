@@ -59,10 +59,14 @@ TASK_KEYWORDS = {
     "GOPRO":        "gopro",
     "DSLR":         "dslr",
     "NESPRESSO":    "nespresso",
+    "ESPRESSO":     "espresso",      
     "SWITCH":       "switch",
     "NAVVIS":       "navvis",
     "SMALLPRINTER": "smallprinter",
     "PRINTER":      "printer",
+    "RASHULT":      "rashult",       
+    "RAM":          "ram",           
+    "GRAPHICSCARD": "graphicscard",  
 }
 
 def body_relative_hand_position(hand_world: np.ndarray, head_pos: np.ndarray, head_quat: np.ndarray) -> np.ndarray:
@@ -141,7 +145,7 @@ def get_task_type(session_id: str) -> str:
     return "UNKNOWN"
 
 VERB_TO_CLASS = {
-    # Universal object_interaction verbs (Original)
+    # Universal object_interaction verbs
     "grab": "object_interaction", "place": "object_interaction", 
     "insert": "object_interaction", "remove": "object_interaction",
     "open": "object_interaction", "close": "object_interaction",
@@ -151,7 +155,7 @@ VERB_TO_CLASS = {
     "assemble": "object_interaction", "attach": "object_interaction",
     "adjust": "object_interaction", "press": "object_interaction",
     
-    # NEW: Verbs discovered from your data run
+    # Batch 1 Discovered Verbs
     "withdraw": "object_interaction", "touch": "object_interaction",
     "hold": "object_interaction", "turn": "object_interaction",
     "align": "object_interaction", "unscrew": "object_interaction",
@@ -160,6 +164,14 @@ VERB_TO_CLASS = {
     "turn_on": "object_interaction", "turn_off": "object_interaction",
     "disassemble": "object_interaction", "unlock": "object_interaction",
 
+    # Batch 2 Discovered Verbs (Espresso, PC Building, IKEA)
+    "tap": "object_interaction", "flip": "object_interaction",
+    "lock": "object_interaction", "pour": "object_interaction",
+    "mix/stir": "object_interaction", "stack/pile": "object_interaction",
+    "split": "object_interaction", "empty": "object_interaction",
+    "click": "object_interaction", "clean": "object_interaction",
+    "load": "object_interaction", "point": "object_interaction",
+
     # Locomotion — primarily NavVis
     "walk": "locomotion", "move": "locomotion",
     "approach": "locomotion", "navigate": "locomotion",
@@ -167,7 +179,7 @@ VERB_TO_CLASS = {
     # Idle
     "wait": "idle", "observe": "idle",
     "watch": "idle", "pause": "idle",
-    "stand": "idle",  # Discovered from your run
+    "stand": "idle", 
 }
 
 def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np.ndarray:
