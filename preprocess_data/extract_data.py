@@ -59,14 +59,21 @@ TASK_KEYWORDS = {
     "GOPRO":        "gopro",
     "DSLR":         "dslr",
     "NESPRESSO":    "nespresso",
-    "ESPRESSO":     "espresso",      
+    "ESPRESSO":     "espresso",
     "SWITCH":       "switch",
     "NAVVIS":       "navvis",
     "SMALLPRINTER": "smallprinter",
     "PRINTER":      "printer",
-    "RASHULT":      "rashult",       
-    "RAM":          "ram",           
-    "GRAPHICSCARD": "graphicscard",  
+    "RASHULT":      "rashult",
+    "RAM":          "ram",
+    "GRAPHICSCARD": "graphicscard",
+    "ATV":            "atv",
+    "BELT":           "belt",
+    "CIRCUITBREAKER": "circuitbreaker",
+    "COFFEE":         "coffee",
+    "KNARREVIK":      "knarrevik",
+    "GLADOM":         "gladom",
+    "MARIUS":         "marius"
 }
 
 def body_relative_hand_position(hand_world: np.ndarray, head_pos: np.ndarray, head_quat: np.ndarray) -> np.ndarray:
@@ -172,6 +179,9 @@ VERB_TO_CLASS = {
     "click": "object_interaction", "clean": "object_interaction",
     "load": "object_interaction", "point": "object_interaction",
 
+    # Batch 3 Discovered Verbs
+    "break": "object_interaction", "validate": "object_interaction",
+    "shift": "object_interaction", "make": "object_interaction",
     # Locomotion — primarily NavVis
     "walk": "locomotion", "move": "locomotion",
     "approach": "locomotion", "navigate": "locomotion",
@@ -188,11 +198,15 @@ def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np
     Takes the specific list of annotation events for this session.
     """
     CLASS_MAP = {"idle": 0, "locomotion": 1, "object_interaction": 2, "anomalous": 3}
-    labels = np.zeros(n_frames, dtype=np.int8)  # default = idle
     
+    # Check if we have data FIRST. 
     if not session_ann:
-        print(f"  [warn] No annotation data found for {session_id} in master JSON — defaulting to idle")
-        return labels
+        print(f"  [warn] No annotation data found for {session_id} — setting labels to -1 (UNKNOWN)")
+        # Return an array of -1s so PyTorch knows to ignore this during evaluation
+        return np.full(n_frames, -1, dtype=np.int8)
+
+    # If we DO have data, default to 0 (idle) and fill in the actions
+    labels = np.zeros(n_frames, dtype=np.int8)
         
     task_type = get_task_type(session_id)
     fine_actions = [e for e in session_ann if e.get("label") == "Fine grained action"]
@@ -238,6 +252,11 @@ def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np
 
 #Main processing function for a single session. 
 def process_session_to_disk(session_id: str, split_output_dir: str,master_annotations: dict):
+    meta_path = os.path.join(split_output_dir, f"{session_id}_meta.json")
+    if os.path.exists(meta_path):
+        # We don't need to print the skips anymore so it doesn't flood your screen
+        return
+    
     session_path = os.path.join(DATASET_DIR, session_id)
     export_dir = os.path.join(session_path, "Export_py")
 
@@ -273,9 +292,22 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     head_raw, left_raw, right_raw = head_raw[:n], left_raw[:n], right_raw[:n]
 
     matrices = head_raw.reshape(-1, 4, 4)
-    head_pos = matrices[:, :3, 3]                              # [N, 3] scene-relative
-    head_quat = R.from_matrix(matrices[:, :3, :3]).as_quat()   # [N, 4]
+    head_pos = matrices[:, :3, 3]  # [N, 3] scene-relative
+    
+    # --- HARDWARE GLITCH FIX ---
+    rot_matrices = matrices[:, :3, :3].copy()
+    
+    # 1. Catch NaN or Infinity values (Hardware dropouts)
+    invalid_mask = np.isnan(rot_matrices).any(axis=(1, 2)) | np.isinf(rot_matrices).any(axis=(1, 2))
+    rot_matrices[invalid_mask] = np.eye(3)
+    
+    # 2. Catch degenerate tracking matrices (A true rotation matrix determinant is 1.0)
+    dets = np.linalg.det(rot_matrices)
+    bad_dets = np.abs(dets - 1.0) > 0.1
+    rot_matrices[bad_dets] = np.eye(3)
 
+    # Now safely convert to quaternions
+    head_quat = R.from_matrix(rot_matrices).as_quat()  # [N, 4]
     left_rel = body_relative_hand_position(left_raw, head_pos, head_quat)
     right_rel = body_relative_hand_position(right_raw, head_pos, head_quat)
 
