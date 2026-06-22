@@ -6,8 +6,7 @@ import glob
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-CURRENT_DIR = os.getcwd()
-TRAIN_DIR = os.path.join(CURRENT_DIR, "preprocess_data", "train")
+TRAIN_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\train"
 FRAME_RATE_HZ = 30.0
 
 # We only augment the training set. We NEVER augment Val or Test!
@@ -79,8 +78,8 @@ def create_synthetic_session(brv, labels, meta, segments, anomaly_type):
         synth_meta = meta.copy()
         synth_meta["session_id"] = synth_sid
         synth_meta["task_type"] = "SYNTHETIC_ANOMALY"
-        synth_meta["class_distribution"]["anomalous"] += anomaly_frames_created
-        synth_meta["class_distribution"]["object_interaction"] -= anomaly_frames_created
+        synth_meta["class_distribution"]["anomalous"] += int(anomaly_frames_created)
+        synth_meta["class_distribution"]["object_interaction"] -= int(anomaly_frames_created)
         
         with open(os.path.join(TRAIN_DIR, f"{synth_sid}_meta.json"), "w") as f:
             json.dump(synth_meta, f, indent=2)
