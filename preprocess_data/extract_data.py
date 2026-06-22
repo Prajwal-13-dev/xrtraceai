@@ -65,18 +65,16 @@ TASK_KEYWORDS = {
     "PRINTER":      "printer",
 }
 
-def quaternion_angular_velocity(quat: np.ndarray, dt: float) -> np.ndarray:
+def body_relative_hand_position(hand_world: np.ndarray, head_pos: np.ndarray, head_quat: np.ndarray) -> np.ndarray:
     """
-    True angular velocity (rad/s) from a quaternion sequence.
-    (Bug 3 fix: quaternions are not a linear space, so np.diff directly on
-    quaternion components -- as the original code did for 'head_sway' -- is
-    mathematically invalid. We convert to rotation vectors first.)
-    quat: [N, 4] in (x, y, z, w) order (scipy convention).
-    Returns: [N, 3], first row is zero (no t-1 reference available).
+    True body-relative hand position: translate to head origin, then rotate
+    into the head's local frame using the INVERSE head rotation.
     """
-    rotvecs = R.from_quat(quat).as_rotvec()
-    angvel = np.diff(rotvecs, axis=0, prepend=rotvecs[0:1]) / dt
-    return angvel
+    translated = hand_world - head_pos
+    head_rot = R.from_quat(head_quat)
+    # Rotate world-frame vectors into the head's local frame
+    rotated = head_rot.inv().apply(translated)
+    return rotated
 
 def relative_angular_velocity(quat: np.ndarray, dt: float) -> np.ndarray:
     """
@@ -143,7 +141,7 @@ def get_task_type(session_id: str) -> str:
     return "UNKNOWN"
 
 VERB_TO_CLASS = {
-    # Universal object_interaction verbs
+    # Universal object_interaction verbs (Original)
     "grab": "object_interaction", "place": "object_interaction", 
     "insert": "object_interaction", "remove": "object_interaction",
     "open": "object_interaction", "close": "object_interaction",
@@ -153,6 +151,15 @@ VERB_TO_CLASS = {
     "assemble": "object_interaction", "attach": "object_interaction",
     "adjust": "object_interaction", "press": "object_interaction",
     
+    # NEW: Verbs discovered from your data run
+    "withdraw": "object_interaction", "touch": "object_interaction",
+    "hold": "object_interaction", "turn": "object_interaction",
+    "align": "object_interaction", "unscrew": "object_interaction",
+    "screw": "object_interaction", "mount": "object_interaction",
+    "lift": "object_interaction", "drop": "object_interaction",
+    "turn_on": "object_interaction", "turn_off": "object_interaction",
+    "disassemble": "object_interaction", "unlock": "object_interaction",
+
     # Locomotion — primarily NavVis
     "walk": "locomotion", "move": "locomotion",
     "approach": "locomotion", "navigate": "locomotion",
@@ -160,6 +167,7 @@ VERB_TO_CLASS = {
     # Idle
     "wait": "idle", "observe": "idle",
     "watch": "idle", "pause": "idle",
+    "stand": "idle",  # Discovered from your run
 }
 
 def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np.ndarray:
@@ -176,6 +184,16 @@ def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np
         
     task_type = get_task_type(session_id)
     fine_actions = [e for e in session_ann if e.get("label") == "Fine grained action"]
+
+    # SAFEGUARD & DEBUG PRINT
+    if fine_actions:
+        sample_start = fine_actions[0].get("start", 0)
+        # If the start time is massive (e.g., 15000), it's likely milliseconds or raw frames.
+        # This print will help you verify the unit on your first run.
+        if sample_start > 1000:
+            print(f"  [URGENT WARN] {session_id} event start is {sample_start}. This is NOT seconds!")
+        else:
+            pass # It is safely in seconds
     
     for event in fine_actions:
         start_frame = int(event["start"] * FRAME_RATE_HZ)
@@ -201,6 +219,7 @@ def load_session_labels(session_id: str, session_ann: list, n_frames: int) -> np
             labels[start_frame:end_frame] = CLASS_MAP[mapped]
         else:
             if verb:
+                print(f"  [unmapped verb] '{verb}' in {session_id} — defaulting to idle")
                 pass # Optional: print(f"  [unmapped] '{verb}'") to debug
                 
     return labels
@@ -245,8 +264,8 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     head_pos = matrices[:, :3, 3]                              # [N, 3] scene-relative
     head_quat = R.from_matrix(matrices[:, :3, :3]).as_quat()   # [N, 4]
 
-    left_rel = left_raw - head_pos
-    right_rel = right_raw - head_pos
+    left_rel = body_relative_hand_position(left_raw, head_pos, head_quat)
+    right_rel = body_relative_hand_position(right_raw, head_pos, head_quat)
 
     spatial = np.hstack([head_pos[:, 1:2], head_quat, left_rel, right_rel])
     assert spatial.shape[1] == SPATIAL_DIM, (
@@ -267,7 +286,16 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
 
     # 3. Extract and Save Ground Truth Labels (Y Tensor)
     task_type = get_task_type(session_id)
-    
+    #Exact string matching (ignoring file extensions)
+    session_ann = []
+    for key, val in master_annotations.items():
+        clean_key = key.rsplit('.', 1)[0]
+        if session_id == clean_key:
+            session_ann = val
+            break
+            
+    labels = load_session_labels(session_id, session_ann, n_frames=n)
+    np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
 
     session_ann = []
     for key, val in master_annotations.items():
