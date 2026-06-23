@@ -145,10 +145,16 @@ def extract_behavioural_profile(brv: np.ndarray, head_pos_full: np.ndarray,
     return profile
 
 def get_task_type(session_id: str) -> str:
-    sid = session_id.upper()
+    # Remove hyphens and underscores to make matching foolproof
+    clean_sid = session_id.upper().replace("-", "").replace("_", "")
+    
     for task in TASK_KEYWORDS:
-        if task in sid:
-            return task
+        # Also clean the keyword just in case you defined them with underscores in your list
+        clean_task = task.upper().replace("-", "").replace("_", "")
+        
+        if clean_task in clean_sid:
+            return task 
+            
     return "UNKNOWN"
 
 VERB_TO_CLASS = {
@@ -158,7 +164,7 @@ VERB_TO_CLASS = {
     "open": "object_interaction", "close": "object_interaction",
     "push": "object_interaction", "pull": "object_interaction",
     "rotate": "object_interaction", "slide": "object_interaction",
-    "inspect": "object_interaction", "exchange": "object_interaction",
+    "exchange": "object_interaction",
     "assemble": "object_interaction", "attach": "object_interaction",
     "adjust": "object_interaction", "press": "object_interaction",
     
@@ -171,17 +177,18 @@ VERB_TO_CLASS = {
     "turn_on": "object_interaction", "turn_off": "object_interaction",
     "disassemble": "object_interaction", "unlock": "object_interaction",
 
-    # Batch 2 Discovered Verbs (Espresso, PC Building, IKEA)
+    # Batch 2 Discovered Verbs 
     "tap": "object_interaction", "flip": "object_interaction",
     "lock": "object_interaction", "pour": "object_interaction",
     "mix/stir": "object_interaction", "stack/pile": "object_interaction",
     "split": "object_interaction", "empty": "object_interaction",
     "click": "object_interaction", "clean": "object_interaction",
-    "load": "object_interaction", "point": "object_interaction",
+    "load": "object_interaction", 
 
     # Batch 3 Discovered Verbs
-    "break": "object_interaction", "validate": "object_interaction",
+    "break": "object_interaction",
     "shift": "object_interaction", "make": "object_interaction",
+    "hit": "object_interaction",
     # Locomotion — primarily NavVis
     "walk": "locomotion", "move": "locomotion",
     "approach": "locomotion", "navigate": "locomotion",
@@ -189,7 +196,7 @@ VERB_TO_CLASS = {
     # Idle
     "wait": "idle", "observe": "idle",
     "watch": "idle", "pause": "idle",
-    "stand": "idle", 
+    "stand": "idle", "point": "idle","inspect": "idle" ,"validate": "idle",
 }
 
 def load_session_labels(session_id: str, session_ann: list, n_frames: int,split: str) -> np.ndarray:
@@ -320,6 +327,8 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
 
     vel = np.diff(spatial, axis=0, prepend=spatial[0:1]) / DT
     brv = np.hstack([spatial, vel])
+    # Any 1-frame velocity spike > 10 m/s is physically impossible 
+    brv[:, 16:22] = np.clip(brv[:, 16:22], -10.0, 10.0)
     assert brv.shape[1] == BRV_TOTAL_DIM, f"brv dim mismatch: {brv.shape[1]} != {BRV_TOTAL_DIM}"
 
     # 1. Save the 22-feature X Tensor
@@ -343,16 +352,6 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     labels = load_session_labels(session_id, session_ann, n_frames=n, split=os.path.basename(split_output_dir))
     np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
 
-    session_ann = []
-    for key, val in master_annotations.items():
-        # If the folder name (session_id) is found inside the JSON key (e.g. "Folder.mp4")
-        if session_id in key:
-            session_ann = val
-            break
-    
-    # Pass the events into our loader
-    labels = load_session_labels(session_id, session_ann, n_frames=n,split=os.path.basename(split_output_dir))
-    np.save(os.path.join(split_output_dir, f"{session_id}_labels.npy"), labels)
 
     # 4. Generate and Save Statistics Metadata
     metadata = {
@@ -374,111 +373,6 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     print(f"  Processed: {session_id}  (brv shape={brv.shape}, task={task_type})")
 
 
-
-def generate_dataset_statistics():
-    
-    print(" GENERATING DATASET STATISTICS & CHARTS")
-    
-    
-    stats = defaultdict(lambda: defaultdict(lambda: {
-        "sessions": 0,
-        "frames": [0, 0, 0, 0]
-    }))
-    session_records = []
-
-    for split in SPLITS:
-        split_dir = os.path.join(OUTPUT_DIR, split)
-        if not os.path.isdir(split_dir):
-            continue
-
-        # Look for _meta.json files in the split folders
-        meta_files = sorted(f for f in os.listdir(split_dir) if f.endswith("_meta.json"))
-        if not meta_files:
-            continue
-
-        for mf in meta_files:
-            with open(os.path.join(split_dir, mf)) as fh:
-                meta = json.load(fh)
-
-            sid       = meta["session_id"]
-            task      = get_task_type(sid)
-            dist      = meta.get("class_distribution", {"idle":0, "locomotion":0, "object_interaction":0, "anomalous":0})
-            counts    = [dist["idle"], dist["locomotion"], dist["object_interaction"], dist["anomalous"]]
-            total     = sum(counts)
-
-            stats[split][task]["sessions"] += 1
-            for i in range(4):
-                stats[split][task]["frames"][i] += counts[i]
-
-            session_records.append({
-                "split":   split,
-                "session": sid,
-                "task":    task,
-                "total":   total,
-                **{cls: counts[i] for i, cls in enumerate(CLASS_NAMES)},
-            })
-
-    # (Print Tables & Stratification Analysis)
-    ANOMALOUS_MIN_PCT  = 1.0
-    LOCOMOTION_MIN_PCT = 2.0
-    IDLE_MAX_PCT       = 70.0
-    ROW_FMT  = "  {task:<14} {sessions:>8}  {idle:>9} {loco:>9} {obj:>9} {anom:>9}  {total:>9}  {warn}"
-    PROW_FMT = "  {task:<14}          {idle:>9.1f}% {loco:>9.1f}% {obj:>9.1f}% {anom:>9.1f}%"
-
-    for split in SPLITS:
-        if split not in stats: continue
-        print(f"\n  SPLIT: {split.upper()}\n" + "-"*92)
-        print(f"  {'Task':<14} {'Sessions':>8}  {'idle':>9} {'loco':>9} {'obj_int':>9} {'anomal':>9}  {'Total':>9}  {'Warnings'}\n" + "-"*92)
-
-        split_totals, split_sessions = [0, 0, 0, 0], 0
-        for task in sorted(stats[split]):
-            s, fr = stats[split][task], stats[split][task]["frames"]
-            tot = sum(fr)
-            split_sessions += s["sessions"]
-            for i in range(4): split_totals[i] += fr[i]
-            pcts = [100 * fr[i] / tot if tot > 0 else 0 for i in range(4)]
-
-            warnings = []
-            if pcts[3] < ANOMALOUS_MIN_PCT: warnings.append(f"⚠ anomalous < {ANOMALOUS_MIN_PCT}%")
-            if pcts[1] < LOCOMOTION_MIN_PCT and task not in ("GOPRO", "DSLR", "NESPRESSO", "SWITCH", "SMALLPRINTER", "PRINTER"):
-                warnings.append(f"⚠ loco < {LOCOMOTION_MIN_PCT}%")
-            if pcts[0] > IDLE_MAX_PCT: warnings.append(f"⚠ idle > {IDLE_MAX_PCT}%")
-            
-            print(ROW_FMT.format(task=task, sessions=s["sessions"], idle=fr[0], loco=fr[1], obj=fr[2], anom=fr[3], total=tot, warn=" | ".join(warnings) if warnings else "OK"))
-            print(PROW_FMT.format(task=task, idle=pcts[0], loco=pcts[1], obj=pcts[2], anom=pcts[3]))
-            print()
-
-    # (Generate Charts)
-    for split in SPLITS:
-        if split not in stats or not stats[split]: continue
-        tasks = sorted(stats[split].keys())
-        n_tasks = len(tasks)
-        if n_tasks == 0: continue
-
-        fig, axes = plt.subplots(1, n_tasks, figsize=(max(6, 3.5 * n_tasks), 5), sharey=False)
-        if n_tasks == 1: axes = [axes]
-        fig.suptitle(f"Class distribution by task — {split.upper()} split", fontsize=13, fontweight="bold", y=1.02)
-
-        for ax, task in zip(axes, tasks):
-            fr = stats[split][task]["frames"]
-            tot = sum(fr)
-            pct = [100 * f / tot if tot else 0 for f in fr]
-
-            bars = ax.bar(CLASS_NAMES, pct, color=CLASS_COLORS, edgecolor="white", linewidth=0.6)
-            ax.set_title(f"{task}\n({stats[split][task]['sessions']} sessions)", fontsize=10)
-            ax.set_ylim(0, 100)
-            ax.tick_params(axis="x", rotation=30, labelsize=8)
-
-            for bar, p in zip(bars, pct):
-                if p > 2:
-                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5, f"{p:.1f}%", ha="center", va="bottom", fontsize=7.5, fontweight="bold")
-            ax.axhline(1, color="#EF4444", linestyle="--", linewidth=0.8, alpha=0.5)
-
-        plt.tight_layout()
-        out_path = os.path.join(OUTPUT_DIR, f"class_dist_{split}.png")
-        plt.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close()
-        print(f"  Chart saved → {out_path}")
 
 if __name__ == "__main__":
     SPLITS_DIR = os.path.join(DATASET_DIR, "data-splits-v1_2")
@@ -555,5 +449,4 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"  [error] {session_id}: {e}")
                     
-    # Generate charts after all files are done processing
-    generate_dataset_statistics()
+    

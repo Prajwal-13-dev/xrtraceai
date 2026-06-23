@@ -3,100 +3,115 @@ import json
 import glob
 import matplotlib.pyplot as plt
 
-TRAIN_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\train"
-OUTPUT_GRAPH_PRE = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\class_dist_train.jpg"
-OUTPUT_GRAPH_POST = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\class_dist_train_post_synth.jpg"
+BASE_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data"
+SPLITS = ["train", "val", "test"]
 
-print("Scanning train directory for updated frame counts and generating graphs...")
-meta_files = glob.glob(os.path.join(TRAIN_DIR, "*_meta.json"))
+print("Scanning directories for updated frame counts and generating all graphs...")
 
-total_idle = 0
-total_loco = 0
-total_obj = 0
-total_anom = 0
-synth_videos = 0
+# Dictionaries to hold separate stats for each split/view
+all_stats = {
+    "train_pre": {},
+    "train_post": {},
+    "val": {},
+    "test": {}
+}
 
-# Dictionaries to hold separate stats for "Before" and "After"
-pre_task_stats = {}
-post_task_stats = {}
+global_totals = {
+    "train": {"idle": 0, "loco": 0, "obj": 0, "anom": 0, "synth_videos": 0, "total_videos": 0},
+    "val": {"idle": 0, "loco": 0, "obj": 0, "anom": 0, "synth_videos": 0, "total_videos": 0},
+    "test": {"idle": 0, "loco": 0, "obj": 0, "anom": 0, "synth_videos": 0, "total_videos": 0}
+}
 
-for meta_file in meta_files:
-    is_synth = "SYNTH_" in meta_file
-    if is_synth:
-        synth_videos += 1
+for split in SPLITS:
+    split_dir = os.path.join(BASE_DIR, split)
+    if not os.path.exists(split_dir):
+        print(f"  [skip] {split} directory not found.")
+        continue
         
-    with open(meta_file, "r") as f:
-        meta = json.load(f)
+    meta_files = glob.glob(os.path.join(split_dir, "*_meta.json"))
+    global_totals[split]["total_videos"] = len(meta_files)
+    
+    for meta_file in meta_files:
+        is_synth = "SYNTH_" in os.path.basename(meta_file)
+        if is_synth:
+            global_totals[split]["synth_videos"] += 1
+            
+        with open(meta_file, "r") as f:
+            meta = json.load(f)
+            
+        dist = meta.get("class_distribution", {})
+        task = meta.get("task_type", "UNKNOWN")
         
-    dist = meta.get("class_distribution", {})
-    task = meta.get("task_type", "UNKNOWN")
-    
-    # --- FIX: Re-assign synthetic anomalies to their original tasks ---
-    if is_synth and task == "SYNTHETIC_ANOMALY":
-        orig_sid = meta.get("session_id", "")
-        # Strip the prefix to get the original session ID
-        for prefix in ["SYNTH_HYPER_SPEED_", "SYNTH_ERRATIC_TREMOR_", "SYNTH_AGGRESSIVE_REACH_"]:
-            if orig_sid.startswith(prefix):
-                orig_sid = orig_sid.replace(prefix, "")
-                break
-                
-        # Look up the original file to find out what task it actually was
-        orig_meta_path = os.path.join(TRAIN_DIR, f"{orig_sid}_meta.json")
-        if os.path.exists(orig_meta_path):
-            with open(orig_meta_path, "r") as orig_f:
-                orig_meta = json.load(orig_f)
-                task = orig_meta.get("task_type", task) # Fallback to current if missing
-    # -----------------------------------------------------------------
-    
-    idle = dist.get("idle", 0)
-    loco = dist.get("locomotion", 0)
-    obj = dist.get("object_interaction", 0)
-    anom = dist.get("anomalous", 0)
-    
-    # Global Totals (Post-Synthesis view for terminal output)
-    total_idle += idle
-    total_loco += loco
-    total_obj += obj
-    total_anom += anom
-    
-    # Initialize dictionary keys
-    if task not in post_task_stats:
-        post_task_stats[task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
-    if task not in pre_task_stats:
-        pre_task_stats[task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+        # --- FIX: Re-assign synthetic anomalies to their original tasks ---
+        if is_synth and task == "SYNTHETIC_ANOMALY":
+            orig_sid = meta.get("session_id", "")
+            for prefix in ["SYNTH_HYPER_SPEED_", "SYNTH_ERRATIC_TREMOR_", "SYNTH_AGGRESSIVE_REACH_"]:
+                if orig_sid.startswith(prefix):
+                    orig_sid = orig_sid.replace(prefix, "")
+                    break
+                    
+            orig_meta_path = os.path.join(split_dir, f"{orig_sid}_meta.json")
+            if os.path.exists(orig_meta_path):
+                with open(orig_meta_path, "r") as orig_f:
+                    orig_meta = json.load(orig_f)
+                    task = orig_meta.get("task_type", task)
+        # -----------------------------------------------------------------
         
-    # 1. Add to POST-synth stats (All files)
-    post_task_stats[task]["idle"] += idle
-    post_task_stats[task]["locomotion"] += loco
-    post_task_stats[task]["object_interaction"] += obj
-    post_task_stats[task]["anomalous"] += anom
+        idle = dist.get("idle", 0)
+        loco = dist.get("locomotion", 0)
+        obj = dist.get("object_interaction", 0)
+        anom = dist.get("anomalous", 0)
+        
+        # Update global counts (using post-synth numbers for train)
+        global_totals[split]["idle"] += idle
+        global_totals[split]["loco"] += loco
+        global_totals[split]["obj"] += obj
+        global_totals[split]["anom"] += anom
+        
+        # Initialize task dictionaries if missing
+        if split == "train":
+            if task not in all_stats["train_post"]: all_stats["train_post"][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+            if task not in all_stats["train_pre"]: all_stats["train_pre"][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+            
+            # Add to POST-synth stats
+            all_stats["train_post"][task]["idle"] += idle
+            all_stats["train_post"][task]["locomotion"] += loco
+            all_stats["train_post"][task]["object_interaction"] += obj
+            all_stats["train_post"][task]["anomalous"] += anom
+            
+            # Add to PRE-synth stats (Original files ONLY)
+            if not is_synth:
+                all_stats["train_pre"][task]["idle"] += idle
+                all_stats["train_pre"][task]["locomotion"] += loco
+                all_stats["train_pre"][task]["object_interaction"] += obj
+                all_stats["train_pre"][task]["anomalous"] += anom
+        else:
+            # Val and Test splits
+            if task not in all_stats[split]: all_stats[split][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+            all_stats[split][task]["idle"] += idle
+            all_stats[split][task]["locomotion"] += loco
+            all_stats[split][task]["object_interaction"] += obj
+            all_stats[split][task]["anomalous"] += anom
+
+print("\n=== FINAL DATASET STATISTICS ===")
+for split in SPLITS:
+    totals = global_totals[split]
+    if totals["total_videos"] == 0: continue
     
-    # 2. Add to PRE-synth stats (Original files ONLY)
-    if not is_synth:
-        pre_task_stats[task]["idle"] += idle
-        pre_task_stats[task]["locomotion"] += loco
-        pre_task_stats[task]["object_interaction"] += obj
-        pre_task_stats[task]["anomalous"] += anom
+    total_frames = totals["idle"] + totals["loco"] + totals["obj"] + totals["anom"]
+    
+    print(f"\n--- {split.upper()} SPLIT ---")
+    print(f"Total Videos: {totals['total_videos']} (Synthetic: {totals['synth_videos']})")
+    if total_frames > 0:
+        print(f"Idle Frames:           {totals['idle']:,} ({totals['idle']/total_frames*100:.1f}%)")
+        print(f"Locomotion Frames:     {totals['loco']:,} ({totals['loco']/total_frames*100:.1f}%)")
+        print(f"Object Interaction:    {totals['obj']:,} ({totals['obj']/total_frames*100:.1f}%)")
+        print(f"ANOMALOUS FRAMES:      {totals['anom']:,} ({totals['anom']/total_frames*100:.1f}%)")
+    else:
+        print("No valid labeled frames found (likely masked with -1).")
 
-total_frames = total_idle + total_loco + total_obj + total_anom
-
-print("\n=== FINAL TRAINING SET STATISTICS ===")
-print(f"Total Videos (Including Synthetic): {len(meta_files)}")
-print(f"Synthetic Videos Generated: {synth_videos}")
-print("-" * 40)
-print(f"Idle Frames:           {total_idle:,} ({total_idle/total_frames*100:.1f}%)")
-print(f"Locomotion Frames:     {total_loco:,} ({total_loco/total_frames*100:.1f}%)")
-print(f"Object Interaction:    {total_obj:,} ({total_obj/total_frames*100:.1f}%)")
-print(f"ANOMALOUS FRAMES:      {total_anom:,} ({total_anom/total_frames*100:.1f}%)")
-print("=====================================\n")
-
-# ============================================================================
-# GRAPH GENERATION HELPER FUNCTION
-# ============================================================================
 def generate_distribution_graph(task_stats, title, output_path):
     tasks = sorted(list(task_stats.keys()))
-    # Filter out empty tasks just in case
-    tasks = [t for t in tasks if sum(task_stats[t].values()) > 0]
     num_tasks = len(tasks)
 
     if num_tasks > 0:
@@ -118,6 +133,8 @@ def generate_distribution_graph(task_stats, title, output_path):
             pcts = [c / total * 100 if total > 0 else 0 for c in counts]
             
             bars = ax.bar(classes, pcts, color=colors)
+            
+            # Print total frames in the title. If 0, it confirms masking.
             ax.set_title(f"{task}\n({total:,} frames)", fontsize=10)
             ax.set_ylim(0, 100)
             ax.tick_params(axis='x', rotation=45, labelsize=9)
@@ -137,11 +154,33 @@ def generate_distribution_graph(task_stats, title, output_path):
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
-        print(f"SUCCESS! Graph saved to: {output_path}")
+        print(f"✅ SUCCESS! Graph saved to: {output_path}")
+    else:
+        print(f"⚠️  Skipped {title} (No tasks found to graph)")
 
-# Generate both graphs
-print("\nDrawing PRE-synthesis task distribution graph...")
-generate_distribution_graph(pre_task_stats, "Class Distribution - TRAIN SPLIT (Pre-Synthetic)", OUTPUT_GRAPH_PRE)
 
-print("Drawing POST-synthesis task distribution graph...")
-generate_distribution_graph(post_task_stats, "Class Distribution - TRAIN SPLIT (Post-Synthetic)", OUTPUT_GRAPH_POST)
+print("\n=== GENERATING GRAPHS ===")
+
+generate_distribution_graph(
+    all_stats["train_pre"], 
+    "Class Distribution - TRAIN SPLIT (Pre-Synthetic)", 
+    os.path.join(BASE_DIR, "class_dist_train_pre_synth.jpg")
+)
+
+generate_distribution_graph(
+    all_stats["train_post"], 
+    "Class Distribution - TRAIN SPLIT (Post-Synthetic)", 
+    os.path.join(BASE_DIR, "class_dist_train_post_synth.jpg")
+)
+
+generate_distribution_graph(
+    all_stats["val"], 
+    "Class Distribution - VAL SPLIT", 
+    os.path.join(BASE_DIR, "class_dist_val.jpg")
+)
+
+generate_distribution_graph(
+    all_stats["test"], 
+    "Class Distribution - TEST SPLIT (Masked)", 
+    os.path.join(BASE_DIR, "class_dist_test.jpg")
+)

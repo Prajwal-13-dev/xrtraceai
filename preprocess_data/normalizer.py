@@ -3,9 +3,7 @@ import json
 import numpy as np
 from pathlib import Path
 
-# ============================================================================
-# CONFIGURATION — must match preprocess_data.py exactly
-# ============================================================================
+
 
 OUTPUT_DIR  = os.getcwd()
 SPLITS      = ["train", "val", "test"]
@@ -14,9 +12,8 @@ META_SUFFIX = "_meta.json"
 SCALER_PATH = os.path.join(OUTPUT_DIR, "brv_scaler.npz")
 SCALER_STATS_PATH = os.path.join(OUTPUT_DIR, "brv_scaler_stats.json")
 
-# ============================================================================
 # SAFETY GUARD — refuse to run if scaler already exists unless user confirms
-# ============================================================================
+
 
 if os.path.exists(SCALER_PATH):
     print(f"\n  Scaler already exists at: {SCALER_PATH}")
@@ -27,11 +24,8 @@ if os.path.exists(SCALER_PATH):
         print("   Aborted. Existing scaler preserved.")
         raise SystemExit(0)
 
-# ============================================================================
 # STEP 1 — Collect ALL train BRV arrays to fit the scaler
-# ============================================================================
-# We iterate through train split only. val and test are never touched here
-# for the purpose of fitting. This is the most important invariant.
+
 
 print("\n=== STEP 1: Fitting scaler on TRAIN split only ===")
 
@@ -62,6 +56,8 @@ sum_x_sq  = None
 
 for fp in train_files:
     arr = np.load(fp).astype(np.float64)   # (T, BRV_DIM)
+
+    arr = np.nan_to_num(arr, nan=0.0)
     T, D = arr.shape
 
     if sum_x is None:
@@ -99,14 +95,13 @@ if nan_in_mean > 0 or nan_in_std > 0:
         "Run: np.isnan(np.load('your_file.npy')).sum() on a few files."
     )
 
-print(f"\n  ✓ Fitted on {n_total:,} frames across {len(train_files)} sessions.")
+print(f"\n Fitted on {n_total:,} frames across {len(train_files)} sessions.")
 print(f"  BRV feature dimension : {len(train_mean)}")
 print(f"  Mean range            : [{train_mean.min():.4f}, {train_mean.max():.4f}]")
 print(f"  Std  range            : [{train_std.min():.6f}, {train_std.max():.4f}]")
 
-# ============================================================================
 # STEP 2 — Save scaler parameters to disk (next to model checkpoints)
-# ============================================================================
+
 
 np.savez(SCALER_PATH, mean=train_mean, std=train_std)
 
@@ -130,12 +125,10 @@ with open(SCALER_STATS_PATH, "w") as f:
 print(f"\n  ✓ Scaler saved → {SCALER_PATH}")
 print(f"  ✓ Scaler stats → {SCALER_STATS_PATH}")
 
-# ============================================================================
+
+
 # STEP 3 — Apply scaler to ALL splits: train, val, test
-# ============================================================================
-# We normalise IN-PLACE, overwriting the original _brv.npy files.
-# The original unnormalised values are gone after this step.
-# If you need to revert, you must re-run preprocess_data.py from scratch.
+
 
 print("\n=== STEP 2: Transforming all splits ===")
 print("  This overwrites _brv.npy files in-place. "
@@ -195,9 +188,8 @@ for split in SPLITS:
     else:
         print(f"    ✓ No NaN values encountered.")
 
-# ============================================================================
 # STEP 4 — Verification: spot-check the normalised output
-# ============================================================================
+
 
 print("\n=== STEP 3: Verification spot-check (train split) ===")
 print("  After normalisation, each feature should have mean ≈ 0, std ≈ 1")
@@ -231,9 +223,7 @@ if check_files:
     else:
         print(f"\n  ✓ Normalisation verified. Data is ready for training.")
 
-# ============================================================================
 # STEP 5 — Final summary
-# ============================================================================
 
 print("  NORMALISATION COMPLETE")
 
