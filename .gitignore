@@ -5,7 +5,26 @@ Data_set/
 preprocess_data/train/
 preprocess_data/val/
 preprocess_data/test/
+preprocess_data/*.npy
+preprocess_data/*.npz
+preprocess_data/*.json
+
+logs/
+*.log
 
 # Also ignore any stray tensor or profile files in the main folder
 preprocess_data/*.npy
 preprocess_data/*.json
+
+__pycache__/
+
+venv/
+.venv/
+env/
+
+.vscode/
+
+models/**/best_model.pth
+models/**/metrics.csv
+models/**/config.json
+models/**/train.log
