@@ -99,7 +99,7 @@ def build_weighted_sampler(dataset):
     # 2. Define the "Equal" distribution (25% for all 4 classes)
     equal_rates = np.array([0.25, 0.25, 0.25, 0.25])
     
-    blended_rates = 0.8 * natural_rates + 0.2 * equal_rates
+    blended_rates = equal_rates
     blended_rates = blended_rates / blended_rates.sum()
     
     # Map the blended rates back to the individual windows
