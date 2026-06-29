@@ -13,6 +13,7 @@ all_stats = {
     "train_pre": {},
     "train_post": {},
     "val": {},
+    "val_post": {},   
     "test": {}
 }
 
@@ -79,14 +80,32 @@ for split in SPLITS:
             all_stats["train_post"][task]["object_interaction"] += obj
             all_stats["train_post"][task]["anomalous"] += anom
             
-            # Add to PRE-synth stats (Original files ONLY)
+            # Add to PRE-synth stats 
             if not is_synth:
                 all_stats["train_pre"][task]["idle"] += idle
                 all_stats["train_pre"][task]["locomotion"] += loco
                 all_stats["train_pre"][task]["object_interaction"] += obj
                 all_stats["train_pre"][task]["anomalous"] += anom
+        elif split == "val":
+            if task not in all_stats["val_post"]: all_stats["val_post"][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+            if task not in all_stats["val"]: all_stats["val"][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
+            
+            # Add to POST-synth stats
+            all_stats["val_post"][task]["idle"] += idle
+            all_stats["val_post"][task]["locomotion"] += loco
+            all_stats["val_post"][task]["object_interaction"] += obj
+            all_stats["val_post"][task]["anomalous"] += anom
+            
+            # Add to PRE-synth stats 
+            if not is_synth:
+                all_stats["val"][task]["idle"] += idle
+                all_stats["val"][task]["locomotion"] += loco
+                all_stats["val"][task]["object_interaction"] += obj
+                all_stats["val"][task]["anomalous"] += anom
+        
+        
         else:
-            # Val and Test splits
+            # Test split
             if task not in all_stats[split]: all_stats[split][task] = {"idle": 0, "locomotion": 0, "object_interaction": 0, "anomalous": 0}
             all_stats[split][task]["idle"] += idle
             all_stats[split][task]["locomotion"] += loco
@@ -154,9 +173,9 @@ def generate_distribution_graph(task_stats, title, output_path):
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
-        print(f"✅ SUCCESS! Graph saved to: {output_path}")
+        print(f"SUCCESS! Graph saved to: {output_path}")
     else:
-        print(f"⚠️  Skipped {title} (No tasks found to graph)")
+        print(f" Skipped {title} (No tasks found to graph)")
 
 
 print("\n=== GENERATING GRAPHS ===")
@@ -178,7 +197,11 @@ generate_distribution_graph(
     "Class Distribution - VAL SPLIT", 
     os.path.join(BASE_DIR, "class_dist_val.jpg")
 )
-
+generate_distribution_graph(
+    all_stats["val_post"], 
+    "Class Distribution - VAL SPLIT (Post-Synthetic)", 
+    os.path.join(BASE_DIR, "class_dist_val_post_synth.jpg")
+)
 generate_distribution_graph(
     all_stats["test"], 
     "Class Distribution - TEST SPLIT (Masked)", 
