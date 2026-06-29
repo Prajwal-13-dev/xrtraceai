@@ -12,10 +12,10 @@ from collections import Counter
 import torch.nn.functional as F
 
 from dataset import XRTraceDataset
-from model import XRAnomalyDetector
+from model_base import XRAnomalyDetector
 
 # 1. Absolute Path (Guarantees it goes to the right folder)
-SAVE_DIR = r"C:\Users\Student3\Documents\xrtraceai\baseline"
+SAVE_DIR = r"C:\Users\Student3\Documents\xrtraceai\models\train_base"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # 2. Dual Logger (Force UTF-8 and auto-flush)
@@ -135,16 +135,16 @@ def train_model():
     csv_path = os.path.join(SAVE_DIR, "metrics.csv")
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'F1_Macro', 'F1_Anom', 'ROC_AUC', 'LR'])
+        writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'F1_Macro', 'F1_Anom', 'Loco_Prec', 'Loco_Rec', 'Loco_F1', 'ROC_AUC', 'LR'])
     # Datasets 
     print("\nLoading datasets...")
     train_dataset = XRTraceDataset(TRAIN_DIR, seq_length=60, stride=15)
     val_dataset   = XRTraceDataset(VAL_DIR,   seq_length=60, stride=60)
 
-    # ── Class weights from actual distribution ────────────────────────────────
+    # Class weights from actual distribution
     class_weights = compute_class_weights(TRAIN_DIR).to(device)
 
-    # ── Stratified sampler ────────────────────────────────────────────────────
+    # Stratified sampler
     sampler      = build_weighted_sampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
@@ -167,13 +167,13 @@ def train_model():
 
     # Model 
     model     = XRAnomalyDetector().to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)   # FIX 1
+    criterion = nn.CrossEntropyLoss(weight=class_weights)  
     optimizer = optim.AdamW(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
 
     # LR scheduler — halve LR when val macro-F1 stops improving
-    # mode='max' because we track F1, not loss
+    # mode='max' because we track F1
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=7
     )
@@ -232,25 +232,37 @@ def train_model():
         all_trues = np.array(all_trues)
 
         # METRICS
-        f1_macro = f1_score(all_trues, all_preds, average='macro',   zero_division=0)
+# ── METRICS ──
+        f1_macro = f1_score(all_trues, all_preds, average='macro', zero_division=0)
         f1_per_class = f1_score(all_trues, all_preds, average=None, zero_division=0)
+        
+        # Explicitly extract Precision and Recall for the diagnostic
+        prec_per_class = precision_score(all_trues, all_preds, average=None, zero_division=0)
+        rec_per_class = recall_score(all_trues, all_preds, average=None, zero_division=0)
+
+        # Class 1 is Locomotion, Class 3 is Anomalous
+        loco_prec = prec_per_class[1] if len(prec_per_class) > 1 else 0.0
+        loco_rec  = rec_per_class[1] if len(rec_per_class) > 1 else 0.0
+        loco_f1   = f1_per_class[1] if len(f1_per_class) > 1 else 0.0
         f1_anomalous = f1_per_class[3] if len(f1_per_class) > 3 else 0.0
 
         try:
-            roc_auc = roc_auc_score(
-                all_trues, np.array(all_probs),
-                multi_class='ovr', average='macro'
-            )
+            roc_auc = roc_auc_score(all_trues, np.array(all_probs), multi_class='ovr', average='macro')
         except ValueError:
             roc_auc = 0.0
 
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"{epoch:>4} | {avg_train_loss:>8.4f} | {avg_val_loss:>8.4f} | "
-              f"{f1_macro:>8.4f} | {f1_anomalous:>8.4f} | {roc_auc:>7.4f} | {current_lr:.2e}")
         
+        # Updated Print Statement
+        print(f"{epoch:>4} | {avg_train_loss:>8.4f} | {avg_val_loss:>8.4f} | "
+              f"{f1_macro:>8.4f} | {f1_anomalous:>8.4f} | "
+              f"Loco(P:{loco_prec:.2f} R:{loco_rec:.2f}) | {roc_auc:>7.4f} | {current_lr:.2e}")
+
+        # ── 3. Append to metrics.csv (You will need to update your CSV header to match!) ──
         with open(csv_path, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([epoch, avg_train_loss, avg_val_loss, f1_macro, f1_anomalous, roc_auc, current_lr])
+            writer.writerow([epoch, avg_train_loss, avg_val_loss, f1_macro, f1_anomalous, 
+                             loco_prec, loco_rec, loco_f1, roc_auc, current_lr])
 
         # Confusion matrix every 10 epochs 
         if epoch % 10 == 0 or epoch == 1:
@@ -280,7 +292,7 @@ def train_model():
                 'val_f1':     best_val_f1,
                 'class_weights': class_weights.cpu().numpy(),
             }, os.path.join(SAVE_DIR, "best_model.pth"))
-            print(f"  ✓ New best saved (F1={best_val_f1:.4f})")
+            print(f" New best saved (F1={best_val_f1:.4f})")
         else:
             epochs_no_improve += 1
 
