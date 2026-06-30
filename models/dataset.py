@@ -42,10 +42,10 @@ class XRTraceDataset(Dataset):
                 window_labels_slice = label_data[start_idx:end_idx]
                 
                 # Minimum 15 anomalous frames required to flag the window
-                if (window_labels_slice == 3).sum() >= 15:
-                    window_label = 3
+                if (window_labels_slice == 7).sum() >= 15:
+                    window_label = 7
                 else:
-                    counts = np.bincount(window_labels_slice)
+                    counts = np.bincount(window_labels_slice, minlength=8)
                     window_label = np.argmax(counts)
                 
                 self.samples.append((str(brv_path), start_idx))

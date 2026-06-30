@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class XRAnomalyDetector(nn.Module):
-    def __init__(self, input_dim=22, num_classes=4, cnn_out_channels=64, lstm_hidden=128):
+    def __init__(self, input_dim=26, num_classes=8, cnn_out_channels=64, lstm_hidden=128):
         super(XRAnomalyDetector, self).__init__()
         
         self.stream1 = nn.Conv1d(
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     model = XRAnomalyDetector()
     
     # 60 frames = 2.0 seconds at 30 Hz
-    dummy_x = torch.randn(32, 60, 22) 
+    dummy_x = torch.randn(32, 60, 26)
     
     logits, attn_weights = model(dummy_x)
     
