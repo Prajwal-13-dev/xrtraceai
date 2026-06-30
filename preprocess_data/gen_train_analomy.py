@@ -221,4 +221,3 @@ if __name__ == "__main__":
                 synthetic_count += 1
 
     print(f"\nSUCCESS: Generated {synthetic_count} brand new synthetic anomalous sessions!")
-    print("Run your original 'preprocess_data.py' script one more time to re-generate the statistics chart and see your new dataset balance!")
