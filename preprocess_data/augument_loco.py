@@ -71,15 +71,19 @@ def augment_locomotion_sessions():
             np.save(Path(TRAIN_DIR) / f"{out_name}_labels.npy", aug_labels.astype(np.int8))
             
             # Save the Meta JSON file 
-            counts = np.bincount(aug_labels, minlength=4)
+            counts = np.bincount(aug_labels, minlength=8)
             aug_meta = orig_meta.copy()
             aug_meta["session_id"] = out_name
             aug_meta["task_type"] = "LOCOMOTION_AUG"
             aug_meta["class_distribution"] = {
                 "idle": int(counts[0]),
                 "locomotion": int(counts[1]),
-                "object_interaction": int(counts[2]),
-                "anomalous": int(counts[3])
+                "grasp_release": int(counts[2]),
+                "assembly": int(counts[3]),
+                "manipulation": int(counts[4]),
+                "control_action": int(counts[5]),
+                "transfer": int(counts[6]),
+                "anomalous": int(counts[7]),
             }
             
             with open(Path(TRAIN_DIR) / f"{out_name}_meta.json", "w") as f:

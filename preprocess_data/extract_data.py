@@ -36,24 +36,24 @@ HAND_MIN_COLS = 5
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SPATIAL_DIM = 11
+SPATIAL_DIM = 13
 IDX = {
-    "head_pos_y": slice(0, 1),
-    "head_quat":  slice(1, 5),
-    "left_rel":   slice(5, 8),
-    "right_rel":  slice(8, 11),
+    "head_pos":  slice(0, 3),
+    "head_quat": slice(3, 7),
+    "left_rel":  slice(7, 10),
+    "right_rel": slice(10, 13),
 }
 VEL_OFFSET = SPATIAL_DIM
 IDX_VEL = {k: slice(v.start + VEL_OFFSET, v.stop + VEL_OFFSET)
            for k, v in IDX.items() if k in ("left_rel", "right_rel")}
-BRV_TOTAL_DIM = SPATIAL_DIM * 2  # 22
+BRV_TOTAL_DIM = SPATIAL_DIM * 2  # 26
 
 # ============================================================================
 # STATISTICS CONFIGURATION
 # ============================================================================
 SPLITS       = ["train", "val", "test"]
-CLASS_NAMES  = ["idle", "locomotion", "object_interaction", "anomalous"]
-CLASS_COLORS = ["#6B7280", "#3B82F6", "#10B981", "#EF4444"]
+CLASS_NAMES  = ["idle", "locomotion", "grasp_release", "assembly", "manipulation", "control_action", "transfer", "anomalous"]
+CLASS_COLORS = ["#6B7280", "#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#EF4444"]
 
 TASK_KEYWORDS = {
     "GOPRO":        "gopro",
@@ -158,45 +158,49 @@ def get_task_type(session_id: str) -> str:
     return "UNKNOWN"
 
 VERB_TO_CLASS = {
-    # Universal object_interaction verbs
-    "grab": "object_interaction", "place": "object_interaction", 
-    "insert": "object_interaction", "remove": "object_interaction",
-    "open": "object_interaction", "close": "object_interaction",
-    "push": "object_interaction", "pull": "object_interaction",
-    "rotate": "object_interaction", "slide": "object_interaction",
-    "exchange": "object_interaction",
-    "assemble": "object_interaction", "attach": "object_interaction",
-    "adjust": "object_interaction", "press": "object_interaction",
-    
-    # Batch 1 Discovered Verbs
-    "withdraw": "object_interaction", "touch": "object_interaction",
-    "hold": "object_interaction", "turn": "object_interaction",
-    "align": "object_interaction", "unscrew": "object_interaction",
-    "screw": "object_interaction", "mount": "object_interaction",
-    "lift": "object_interaction", "drop": "object_interaction",
-    "turn_on": "object_interaction", "turn_off": "object_interaction",
-    "disassemble": "object_interaction", "unlock": "object_interaction",
+    # grasp_release — reaching out, picking up / putting down
+    "grab": "grasp_release", "place": "grasp_release",
+    "lift": "grasp_release", "drop": "grasp_release",
+    "hold": "grasp_release", "withdraw": "grasp_release",
+    "touch": "grasp_release",
 
-    # Batch 2 Discovered Verbs 
-    "tap": "object_interaction", "flip": "object_interaction",
-    "lock": "object_interaction", "pour": "object_interaction",
-    "mix/stir": "object_interaction", "stack/pile": "object_interaction",
-    "split": "object_interaction", "empty": "object_interaction",
-    "click": "object_interaction", "clean": "object_interaction",
-    "load": "object_interaction", 
+    # assembly — connecting, fastening, fitting parts together
+    "assemble": "assembly", "attach": "assembly",
+    "insert": "assembly", "remove": "assembly",
+    "mount": "assembly", "unscrew": "assembly",
+    "screw": "assembly", "lock": "assembly",
+    "unlock": "assembly", "disassemble": "assembly",
+    "exchange": "assembly",
 
-    # Batch 3 Discovered Verbs
-    "break": "object_interaction",
-    "shift": "object_interaction", "make": "object_interaction",
-    "hit": "object_interaction",
-    # Locomotion — primarily NavVis
+    # manipulation — sustained movement / adjustment of held object
+    "rotate": "manipulation", "slide": "manipulation",
+    "adjust": "manipulation", "flip": "manipulation",
+    "turn": "manipulation", "align": "manipulation",
+    "push": "manipulation", "pull": "manipulation",
+    "shift": "manipulation", "break": "manipulation",
+    "hit": "manipulation",
+
+    # control_action — brief activation / deactivation of a device
+    "press": "control_action", "click": "control_action",
+    "tap": "control_action", "turn_on": "control_action",
+    "turn_off": "control_action", "open": "control_action",
+    "close": "control_action",
+
+    # transfer — moving contents, filling, emptying, cleaning
+    "pour": "transfer", "load": "transfer",
+    "empty": "transfer", "stack/pile": "transfer",
+    "split": "transfer", "make": "transfer",
+    "clean": "transfer", "mix/stir": "transfer",
+
+    # locomotion — primarily NavVis sessions
     "walk": "locomotion", "move": "locomotion",
     "approach": "locomotion", "navigate": "locomotion",
-    
-    # Idle
+
+    # idle — stationary observation / waiting
     "wait": "idle", "observe": "idle",
     "watch": "idle", "pause": "idle",
-    "stand": "idle", "point": "idle","inspect": "idle" ,"validate": "idle",
+    "stand": "idle", "point": "idle",
+    "inspect": "idle", "validate": "idle",
 }
 
 def load_session_labels(session_id: str, session_ann: list, n_frames: int,split: str) -> np.ndarray:
@@ -204,7 +208,12 @@ def load_session_labels(session_id: str, session_ann: list, n_frames: int,split:
     Returns frame-level label array of length n_frames.
     Takes the specific list of annotation events for this session.
     """
-    CLASS_MAP = {"idle": 0, "locomotion": 1, "object_interaction": 2, "anomalous": 3}
+    CLASS_MAP = {
+        "idle": 0, "locomotion": 1,
+        "grasp_release": 2, "assembly": 3,
+        "manipulation": 4, "control_action": 5,
+        "transfer": 6, "anomalous": 7,
+    }
     # If this is a test set video, mathematically guarantee it is blinded.
     if split == "test":
         return np.full(n_frames, -1, dtype=np.int8)
@@ -320,7 +329,7 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     left_rel = body_relative_hand_position(left_raw, head_pos, head_quat)
     right_rel = body_relative_hand_position(right_raw, head_pos, head_quat)
 
-    spatial = np.hstack([head_pos[:, 1:2], head_quat, left_rel, right_rel])
+    spatial = np.hstack([head_pos[:, :3], head_quat, left_rel, right_rel])
     assert spatial.shape[1] == SPATIAL_DIM, (
         f"spatial dim mismatch: {spatial.shape[1]} != {SPATIAL_DIM}"
     )
@@ -328,7 +337,7 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
     vel = np.diff(spatial, axis=0, prepend=spatial[0:1]) / DT
     brv = np.hstack([spatial, vel])
     # Any 1-frame velocity spike > 10 m/s is physically impossible 
-    brv[:, 16:22] = np.clip(brv[:, 16:22], -10.0, 10.0)
+    brv[:, 20:26] = np.clip(brv[:, 20:26], -10.0, 10.0)
     assert brv.shape[1] == BRV_TOTAL_DIM, f"brv dim mismatch: {brv.shape[1]} != {BRV_TOTAL_DIM}"
 
     # 1. Save the 22-feature X Tensor
@@ -363,8 +372,12 @@ def process_session_to_disk(session_id: str, split_output_dir: str,master_annota
         "class_distribution": {
             "idle": int((labels == 0).sum()),
             "locomotion": int((labels == 1).sum()),
-            "object_interaction": int((labels == 2).sum()),
-            "anomalous": int((labels == 3).sum()),
+            "grasp_release": int((labels == 2).sum()),
+            "assembly": int((labels == 3).sum()),
+            "manipulation": int((labels == 4).sum()),
+            "control_action": int((labels == 5).sum()),
+            "transfer": int((labels == 6).sum()),
+            "anomalous": int((labels == 7).sum()),
         }
     }
     with open(os.path.join(split_output_dir, f"{session_id}_meta.json"), "w") as f:

@@ -10,7 +10,8 @@ VAL_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\val"
 FRAME_RATE_HZ = 30.0
 
 def find_interaction_segments(labels, min_length=30):
-    is_interaction = (labels == 2).astype(int)
+    """Finds continuous blocks of any interaction class (2-6)"""
+    is_interaction = np.isin(labels, [2, 3, 4, 5, 6]).astype(int)
     diffs = np.diff(np.pad(is_interaction, (1, 1), constant_values=0))
     starts = np.where(diffs == 1)[0]
     ends = np.where(diffs == -1)[0]
@@ -37,36 +38,37 @@ def create_synthetic_session(brv, labels, meta, segments, anomaly_type):
         
         if anomaly_type == "HYPER_SPEED":
             speed_mult = np.random.uniform(1.8, 3.2)
-            synth_brv[sub_start:sub_end, 16:22] *= speed_mult
-            
+            synth_brv[sub_start:sub_end, 20:26] *= speed_mult
+
         elif anomaly_type == "ERRATIC_TREMOR":
             noise_pos = np.random.normal(0, 0.05, (sub_size, 6))
-            synth_brv[sub_start:sub_end, 5:11] += noise_pos
-            
+            synth_brv[sub_start:sub_end, 7:13] += noise_pos
+
             if sub_start > 0:
-                spatial_segment = synth_brv[sub_start-1:sub_end, 5:11]
+                spatial_segment = synth_brv[sub_start-1:sub_end, 7:13]
             else:
-                spatial_segment = np.vstack([synth_brv[0:1, 5:11], synth_brv[sub_start:sub_end, 5:11]])
-            
+                spatial_segment = np.vstack([synth_brv[0:1, 7:13], synth_brv[sub_start:sub_end, 7:13]])
+
             recomputed_vel = np.diff(spatial_segment, axis=0) * FRAME_RATE_HZ
-            synth_brv[sub_start:sub_end, 16:22] = recomputed_vel
-            
+            synth_brv[sub_start:sub_end, 20:26] = recomputed_vel
+
         elif anomaly_type == "AGGRESSIVE_REACH":
             reach_mult = np.random.uniform(1.2, 1.6)
-            synth_brv[sub_start:sub_end, 5:11] *= reach_mult
-            synth_brv[sub_start:sub_end, 16:22] *= reach_mult
+            synth_brv[sub_start:sub_end, 7:13] *= reach_mult
+            synth_brv[sub_start:sub_end, 20:26] *= reach_mult
 
         elif anomaly_type == "SUDDEN_HEAD_JERK":
-            t = np.linspace(0, np.pi, sub_size) 
-            dip_magnitude = np.random.uniform(0.10, 0.25)  
-            synth_brv[sub_start:sub_end, 0] -= np.sin(t) * dip_magnitude
-            
+            # head_pos_y is now index 1; vel_head_pos_y is index 14
+            t = np.linspace(0, np.pi, sub_size)
+            dip_magnitude = np.random.uniform(0.10, 0.25)
+            synth_brv[sub_start:sub_end, 1] -= np.sin(t) * dip_magnitude
+
             if sub_start > 0:
-                spatial_segment = synth_brv[sub_start-1:sub_end, 0]
+                spatial_segment = synth_brv[sub_start-1:sub_end, 1]
             else:
-                spatial_segment = np.concatenate(([synth_brv[0, 0]], synth_brv[sub_start:sub_end, 0]))
-                
-            synth_brv[sub_start:sub_end, 11] = np.diff(spatial_segment) * FRAME_RATE_HZ
+                spatial_segment = np.concatenate(([synth_brv[0, 1]], synth_brv[sub_start:sub_end, 1]))
+
+            synth_brv[sub_start:sub_end, 14] = np.diff(spatial_segment) * FRAME_RATE_HZ
 
         elif anomaly_type == "CONTROLLER_DROP":
             drop_scenario = np.random.choice(["LEFT", "RIGHT", "BOTH"])
@@ -98,13 +100,13 @@ def create_synthetic_session(brv, labels, meta, segments, anomaly_type):
             
             for hand in hands_to_process:
                 if hand == "LEFT":
-                    pos_start, pos_end = 5, 8
-                    y_idx = 6
-                    vel_start, vel_end = 16, 19
-                else: 
-                    pos_start, pos_end = 8, 11
-                    y_idx = 9
-                    vel_start, vel_end = 19, 22
+                    pos_start, pos_end = 7, 10
+                    y_idx = 8
+                    vel_start, vel_end = 20, 23
+                else:
+                    pos_start, pos_end = 10, 13
+                    y_idx = 11
+                    vel_start, vel_end = 23, 26
 
                 synth_brv[sub_start:sub_end, y_idx] -= gravity_drop
                 
@@ -115,7 +117,7 @@ def create_synthetic_session(brv, labels, meta, segments, anomaly_type):
                     
                 synth_brv[sub_start:sub_end, vel_start:vel_end] = np.diff(spatial_segment, axis=0) * FRAME_RATE_HZ
 
-        synth_labels[sub_start:sub_end] = 3
+        synth_labels[sub_start:sub_end] = 7
         anomaly_frames_created += sub_size
 
     if anomaly_frames_created > 0:
@@ -128,8 +130,13 @@ def create_synthetic_session(brv, labels, meta, segments, anomaly_type):
         synth_meta = meta.copy()
         synth_meta["session_id"] = synth_sid
         synth_meta["task_type"] = "SYNTHETIC_ANOMALY"
-        synth_meta["class_distribution"]["anomalous"] += int(anomaly_frames_created)
-        synth_meta["class_distribution"]["object_interaction"] -= int(anomaly_frames_created)
+        synth_counts = np.bincount(synth_labels.astype(np.int64), minlength=8)
+        synth_meta["class_distribution"] = {
+            "idle": int(synth_counts[0]), "locomotion": int(synth_counts[1]),
+            "grasp_release": int(synth_counts[2]), "assembly": int(synth_counts[3]),
+            "manipulation": int(synth_counts[4]), "control_action": int(synth_counts[5]),
+            "transfer": int(synth_counts[6]), "anomalous": int(synth_counts[7]),
+        }
         
         with open(os.path.join(VAL_DIR, f"{synth_sid}_meta.json"), "w") as f:
             json.dump(synth_meta, f, indent=2)

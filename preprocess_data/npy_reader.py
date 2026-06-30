@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 # 1. Load the data
-data = np.load('R073-20July-GoPro_brv.npy')
+data = np.load(r'C:\Users\Student3\Documents\xrtraceai\preprocess_data\train\UG_00_R040-13July-Nespresso_labels.npy')
 
 # 2. Provide exactly 22 column names
 columns = [
