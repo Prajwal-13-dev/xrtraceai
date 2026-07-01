@@ -47,7 +47,9 @@ if not train_files:
 # have physically inflated values that would expand the std and compress the anomaly signal
 # after normalization. We still APPLY the scaler to everything including synthetic files.
 fit_files = [fp for fp in train_files
-             if "SYNTH_" not in fp.name and "LOCO_AUG_" not in fp.name]
+             if "SYNTH_" not in fp.name
+             and "LOCO_AUG_" not in fp.name
+             and "RARE_AUG_" not in fp.name]
 if not fit_files:
     raise FileNotFoundError("No original (non-synthetic) BRV files found in train split.")
 

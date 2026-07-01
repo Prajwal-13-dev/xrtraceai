@@ -15,7 +15,7 @@ from dataset import XRTraceDataset
 from model_base import XRAnomalyDetector
 
 # 1. Absolute Path (Guarantees it goes to the right folder)
-SAVE_DIR = r"C:\Users\Student3\Documents\xrtraceai\models\train_base_8class"
+SAVE_DIR = r"C:\Users\Student3\Documents\xrtraceai\models\train_base_8class_v4"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # 2. Dual Logger (Force UTF-8 and auto-flush)
@@ -39,11 +39,11 @@ sys.stdout = DualLogger(os.path.join(SAVE_DIR, "train.log"))
 
 # 3. Your Hyperparameters
 LEARNING_RATE  = 1e-4
-WEIGHT_DECAY   = 1e-4
+WEIGHT_DECAY   = 1e-3
 BATCH_SIZE     = 64
-EPOCHS         = 10
+EPOCHS         = 60
 MAX_GRAD_NORM  = 1.0
-EARLY_STOP_PAT = 15
+EARLY_STOP_PAT = 10
 
 TRAIN_DIR = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\train"
 VAL_DIR   = r"C:\Users\Student3\Documents\xrtraceai\preprocess_data\val"
@@ -81,12 +81,15 @@ def compute_class_weights(train_dir, num_classes=8):
     # Step 3: normalise to sum to num_classes
     weights = weights / weights.sum() * num_classes
 
-    # Step 4: explicit locomotion boost — loco never predicted without this
-    weights[1] *= 3.0
+    # Step 4: explicit per-class boosts for rare/hard classes
+    weights[1] *= 3.0 # locomotion     — rare, needs push
+    weights[4] *= 2.0  # manipulation   — gets swamped by assembly
+    weights[5] *= 3.0  # control_action — very rare, needs strong push
+    weights[6] *= 3.0  # transfer       — very rare, extremely volatile
 
     weights = weights.astype(np.float32)
 
-    print("\nSoftened class weights (sqrt dampened, loco x3):")
+    print("\nSoftened class weights (sqrt dampened + explicit boosts):")
     for i, (name, w) in enumerate(zip(CLASS_NAMES, weights)):
         print(f"  [{i}] {name:<22}: {w:.4f}")
 
@@ -185,7 +188,7 @@ def train_model():
     # LR scheduler — halve LR when val macro-F1 stops improving
     # mode='max' because we track F1
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=12,min_lr=1e-6
+        optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-6
     )
 
     # Training state 
@@ -207,6 +210,7 @@ def train_model():
             y_batch = y_batch.to(device, non_blocking=True)
 
             optimizer.zero_grad()
+            x_batch = x_batch + 0.01 * torch.randn_like(x_batch)
             logits, _ = model(x_batch)
             loss = criterion(logits, y_batch)
             loss.backward()
@@ -304,10 +308,18 @@ def train_model():
         else:
             epochs_no_improve += 1
 
-        # Early stopping
+        # Gap-based early stopping: if val_loss drifts >0.5 above train_loss
+        # the model is memorising training patterns, not generalising
+        loss_gap = avg_val_loss - avg_train_loss
+        if loss_gap > 0.5:
+            print(f"\n  Early stopping: train/val loss gap = {loss_gap:.3f} > 0.5 "
+                  f"(memorisation detected at epoch {epoch})")
+            break
+
+        # F1-plateau early stopping
         if epochs_no_improve >= EARLY_STOP_PAT:
             print(f"\n  Early stopping at epoch {epoch} "
-                  f"(no improvement for {EARLY_STOP_PAT} epochs)")
+                  f"(no F1 improvement for {EARLY_STOP_PAT} epochs)")
             break
 
     print(f"\nDone. Best val macro-F1: {best_val_f1:.4f}")

@@ -26,7 +26,7 @@ class XRAnomalyDetector(nn.Module):
         self.bn2 = nn.BatchNorm1d(combined_channels)
         
         # CNN Dropout added here
-        self.cnn_dropout = nn.Dropout(0.3)
+        self.cnn_dropout = nn.Dropout(0.5)
         
         self.bilstm = nn.LSTM(
             input_size=combined_channels, 
@@ -39,7 +39,7 @@ class XRAnomalyDetector(nn.Module):
         
         self.attention = nn.Linear(lstm_hidden * 2, 1)
         self.fc1 = nn.Linear(lstm_hidden * 2, 64) 
-        self.dropout = nn.Dropout(0.4)
+        self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(64, num_classes)
 
     def forward(self, x):
