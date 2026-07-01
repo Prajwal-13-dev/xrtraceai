@@ -28,3 +28,20 @@ models/**/best_model.pth
 models/**/metrics.csv
 models/**/config.json
 models/**/train.log
+
+# ===========================
+# Unity
+# ===========================
+
+frontend_xrtraceai/[Ll]ibrary/
+frontend_xrtraceai/[Tt]emp/
+frontend_xrtraceai/[Ll]ogs/
+frontend_xrtraceai/[Uu]ser[Ss]ettings/
+
+frontend_xrtraceai/*.csproj
+frontend_xrtraceai/*.sln
+frontend_xrtraceai/*.slnx
+frontend_xrtraceai/*.user
+frontend_xrtraceai/*.unityproj
+frontend_xrtraceai/*.pidb
+frontend_xrtraceai/*.booproj
