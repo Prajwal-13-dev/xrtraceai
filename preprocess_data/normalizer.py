@@ -43,8 +43,17 @@ if not train_files:
         "Run preprocess_data.py first."
     )
 
-print(f"  Found {len(train_files)} BRV files in train split.")
-print("  Computing mean and std across all train frames...")
+# Fit on original sessions ONLY — synthetic files (HYPER_SPEED, CONTROLLER_DROP, etc.)
+# have physically inflated values that would expand the std and compress the anomaly signal
+# after normalization. We still APPLY the scaler to everything including synthetic files.
+fit_files = [fp for fp in train_files
+             if "SYNTH_" not in fp.name and "LOCO_AUG_" not in fp.name]
+if not fit_files:
+    raise FileNotFoundError("No original (non-synthetic) BRV files found in train split.")
+
+print(f"  Found {len(train_files)} BRV files total ({len(fit_files)} original, "
+      f"{len(train_files) - len(fit_files)} synthetic/aug).")
+print("  Fitting scaler on original sessions only...")
 
 # Two-pass Welford online algorithm — memory efficient for large datasets.
 # Pass 1: compute mean without loading everything at once.
@@ -54,7 +63,7 @@ n_total   = 0
 sum_x     = None   # will be shape (BRV_DIM,)
 sum_x_sq  = None
 
-for fp in train_files:
+for fp in fit_files:
     arr = np.load(fp).astype(np.float64)   # (T, BRV_DIM)
 
     arr = np.nan_to_num(arr, nan=0.0)
@@ -68,7 +77,6 @@ for fp in train_files:
     sum_x    += arr.sum(axis=0)
     sum_x_sq += (arr ** 2).sum(axis=0)
 
-    # light progress indicator
     print(f"    {fp.name}: {T} frames  (running total: {n_total})", end="\r")
 
 print()  # newline after \r progress
@@ -95,7 +103,7 @@ if nan_in_mean > 0 or nan_in_std > 0:
         "Run: np.isnan(np.load('your_file.npy')).sum() on a few files."
     )
 
-print(f"\n Fitted on {n_total:,} frames across {len(train_files)} sessions.")
+print(f"\n Fitted on {n_total:,} frames across {len(fit_files)} original sessions (synthetic excluded).")
 print(f"  BRV feature dimension : {len(train_mean)}")
 print(f"  Mean range            : [{train_mean.min():.4f}, {train_mean.max():.4f}]")
 print(f"  Std  range            : [{train_std.min():.6f}, {train_std.max():.4f}]")
