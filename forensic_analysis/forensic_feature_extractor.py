@@ -2,14 +2,15 @@ import numpy as np
 
 FPS = 30
 
+# ✅ FINAL CLASS MAP (your dataset)
 LABEL_MAP = {
     0: "idle",
-    1: "walking",
+    1: "locomotion",
     2: "grasp_release",
     3: "assembly",
     4: "manipulation",
     5: "control_action",
-    6: "other",
+    6: "transfer",
     7: "anomalous"
 }
 
@@ -58,10 +59,10 @@ def extract_segment_features(segment, df):
     peak_velocity = float(np.max(combined_vel))
     velocity_std = float(np.std(combined_vel))
 
-    # Movement Intensity
+    # Movement intensity
     intensity = total_disp / (duration + 1e-5)
 
-    # Dominant Hand
+    # Dominant hand
     if abs(left_disp - right_disp) < 1e-6:
         dominant_hand = "balanced"
         dominance_ratio = 0.5
@@ -69,10 +70,10 @@ def extract_segment_features(segment, df):
         dominant_hand = "left" if left_disp > right_disp else "right"
         dominance_ratio = max(left_disp, right_disp) / (total_disp + 1e-5)
 
-    # Anomaly
+    # Anomaly flag
     anomaly_flag = 1 if label == 7 else 0
 
-    # Suspicion Score
+    # Suspicion score
     suspicion_score = (
         0.4 * peak_velocity +
         0.3 * velocity_std +
