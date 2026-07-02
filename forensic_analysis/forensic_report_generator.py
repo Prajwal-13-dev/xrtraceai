@@ -27,6 +27,46 @@ def format_time(frame, fps=30):
 
 
 # -------------------------
+# ACTIVITY-AWARE RULES
+# -------------------------
+def activity_context_rules(f):
+    label = f["label"]
+
+    if label == "idle":
+        if f["peak_velocity"] > 0.7:
+            return "unexpected motion during idle state"
+
+    elif label == "locomotion":
+        if f["dominant_hand"] != "balanced":
+            return "asymmetric movement during locomotion"
+
+    elif label == "grasp_release":
+        if f["dominance_ratio"] > 0.8:
+            return "one-handed interaction dominance detected"
+
+    elif label == "assembly":
+        if f["peak_velocity"] > 1.5:
+            return "unusually fast assembly interaction"
+
+    elif label == "manipulation":
+        if f["velocity_std"] > 0.8:
+            return "unstable manipulation behavior"
+
+    elif label == "control_action":
+        if f["movement_intensity"] > 1.5:
+            return "forceful control interaction detected"
+
+    elif label == "transfer":
+        if f["dominant_hand"] != "balanced":
+            return "imbalanced object transfer behavior"
+
+    elif label == "anomalous":
+        return "explicit anomaly detected by model"
+
+    return None
+
+
+# -------------------------
 # REASONING ENGINE
 # -------------------------
 def generate_reasoning(f):
@@ -43,6 +83,10 @@ def generate_reasoning(f):
 
     if f["movement_intensity"] > 1.5:
         reasons.append("elevated movement intensity")
+
+    context_reason = activity_context_rules(f)
+    if context_reason:
+        reasons.append(context_reason)
 
     if not reasons:
         return "movement pattern within expected behavioral range"
@@ -70,7 +114,7 @@ def generate_detailed_sentence(feature, start_frame):
 
 
 # -------------------------
-# COMPACT INSIGHT (KEY)
+# COMPACT INSIGHT
 # -------------------------
 def generate_compact_insight(f):
     parts = []
@@ -89,7 +133,9 @@ def generate_compact_insight(f):
 
     activity = f["label"]
 
-    if f["anomaly"] == 1 or f["suspicion_score"] > 2:
+    if f["label"] == "anomalous":
+        conclusion = "confirms anomalous behavior detected in XR interaction"
+    elif f["suspicion_score"] > 2:
         conclusion = "suggests irregular interaction behavior"
     elif f["suspicion_score"] > 1:
         conclusion = "indicates potentially unusual behavior"
@@ -100,7 +146,7 @@ def generate_compact_insight(f):
 
 
 # -------------------------
-# FINAL REPORT
+# FINAL REPORT GENERATOR
 # -------------------------
 def generate_report(features, segments):
     report = []
@@ -110,6 +156,7 @@ def generate_report(features, segments):
         compact = generate_compact_insight(f)
 
         report.append({
+            "event_id": f["id"],
             "detailed_report": detailed,
             "forensic_insight": compact
         })
